@@ -29,6 +29,8 @@ const db = createClient(
 const MAX_ANALYZE_PER_RUN = 40
 /** Noticias por request a Claude. */
 const BATCH_SIZE = 10
+/** Tope de notificaciones por corrida: el celular no puede vibrar 8 veces seguidas. */
+const MAX_NEWS_ALERTS_PER_RUN = 3
 
 type Topic = { slug: string; label: string; keywords: string[] }
 
@@ -108,14 +110,29 @@ Deno.serve(async (req) => {
 
   // ---------- 2. Dedupe: dentro de la corrida y contra lo ya guardado ----------
   const byUrl = new Map(candidates.map((c) => [c.url, c]))
-  const urls = [...byUrl.keys()]
 
-  const known = new Set<string>()
-  for (let i = 0; i < urls.length; i += 200) {
-    const { data } = await db.from('news').select('url').in('url', urls.slice(i, i + 200))
-    for (const row of data ?? []) if (row.url) known.add(row.url)
+  // Se traen las URLs conocidas y se comparan en memoria. NO se filtra con
+  // .in('url', [...]): eso mete cada URL en el query string y ~100 URLs ya
+  // superan los 13KB, así que la request falla y el dedupe deja de funcionar
+  // en silencio — re-analizando (y re-pagando) las mismas noticias por siempre.
+  // Los feeds solo traen items recientes, así que 30 días alcanzan de sobra.
+  const knownSince = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString()
+  const { data: knownRows, error: knownError } = await db
+    .from('news')
+    .select('url')
+    .gte('created_at', knownSince)
+    .limit(10000)
+
+  if (knownError) {
+    // Sin dedupe confiable no se analiza nada: es preferible una corrida vacía
+    // a pagar de nuevo por noticias que ya están en la base.
+    return Response.json(
+      { ok: false, error: `dedupe falló, se aborta para no re-analizar: ${knownError.message}` },
+      { status: 500 },
+    )
   }
 
+  const known = new Set((knownRows ?? []).map((r) => r.url).filter(Boolean))
   const fresh = [...byUrl.values()].filter((c) => !known.has(c.url))
   stats.alreadyKnown = byUrl.size - fresh.length
 
@@ -188,8 +205,12 @@ Deno.serve(async (req) => {
   }
 
   // ---------- 5. Alertas por noticias negativas sobre activos en cartera ----------
-  const since = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString()
-
+  //
+  // UNA alerta por NOTICIA, no por símbolo. Una sola nota sobre la Fed puede
+  // tocar 6 CEDEARs; con una alerta por símbolo el celular vibra 6 veces por la
+  // misma noticia. El artículo ya está deduplicado por URL (se analiza una sola
+  // vez en su vida), así que no hace falta un dedupe extra por símbolo — y ese
+  // dedupe además suprimía noticias DISTINTAS sobre el mismo activo.
   for (const user of users ?? []) {
     // Solo los símbolos de ESTE usuario: una alerta sobre un activo que no tiene no sirve
     const userSymbols = new Set(
@@ -197,51 +218,50 @@ Deno.serve(async (req) => {
     )
     if (!userSymbols.size) continue
 
-    const { data: recent } = await db
-      .from('alerts')
-      .select('symbol')
-      .eq('user_id', user.id)
-      .eq('alert_type', 'news_negative')
-      .gte('created_at', since)
-    const alertedToday = new Set((recent ?? []).map((a) => a.symbol))
+    let sentThisRun = 0
 
     for (const { analysis, item } of alertPayloads) {
-      // Validación contra alucinaciones: solo símbolos que el usuario realmente tiene.
-      // Un ticker inventado por el modelo no puede generar una alerta.
-      const hits = analysis.related_symbols.filter((s) => userSymbols.has(s.toUpperCase()))
+      // Validación contra alucinaciones: solo símbolos que el usuario realmente
+      // tiene. Un ticker inventado por el modelo no puede generar una alerta.
+      const hits = [...new Set(analysis.related_symbols.map((s) => s.toUpperCase()))].filter((s) =>
+        userSymbols.has(s),
+      )
       if (!hits.length) continue
 
-      for (const symbol of hits) {
-        if (alertedToday.has(symbol)) continue
-        alertedToday.add(symbol)
+      // Tope por corrida: un día de mucha noticia mala no puede convertirse en
+      // una ráfaga de notificaciones.
+      if (sentThisRun >= MAX_NEWS_ALERTS_PER_RUN) break
+      sentThisRun++
 
-        const { data: inserted } = await db
-          .from('alerts')
-          .insert({
-            user_id: user.id,
-            alert_type: 'news_negative',
-            symbol,
-            title: `Noticia negativa — ${symbol}`,
-            message: analysis.summary,
-            severity: 'warning',
-            action_suggested: `Revisar posición en ${symbol}`,
-          })
-          .select('id')
-          .single()
+      const label = hits.join(', ')
+      const { data: inserted } = await db
+        .from('alerts')
+        .insert({
+          user_id: user.id,
+          alert_type: 'news_negative',
+          symbol: hits[0], // la lista completa va en el mensaje
+          title: `Noticia negativa — ${label}`,
+          message: `${analysis.summary}\n\n${item.title}`,
+          severity: 'warning',
+          action_suggested: `Revisar ${label}`,
+        })
+        .select('id')
+        .single()
 
-        stats.alerts++
+      stats.alerts++
 
-        if (user.push_subscription && inserted) {
-          const ok = await sendPush(db, user.id, user.push_subscription, {
-            title: `Noticia negativa — ${symbol}`,
-            body: item.title,
-            tag: `news-${symbol}`,
-            url: '/noticias',
-            alertId: inserted.id,
-            severity: 'warning',
-          })
-          if (ok) await db.from('alerts').update({ push_sent: true }).eq('id', inserted.id)
-        }
+      if (user.push_subscription && inserted) {
+        const ok = await sendPush(db, user.id, user.push_subscription, {
+          title: `Noticia negativa — ${label}`,
+          body: item.title,
+          // tag por artículo: si llegan dos push de la misma noticia, el
+          // segundo reemplaza al primero en vez de apilarse
+          tag: `news-${inserted.id}`,
+          url: '/noticias',
+          alertId: inserted.id,
+          severity: 'warning',
+        })
+        if (ok) await db.from('alerts').update({ push_sent: true }).eq('id', inserted.id)
       }
     }
   }
