@@ -9,7 +9,9 @@ import { RESCUE_RANK, sortSectors } from './sectors'
  * incorrecto para bonos (cotizan por 100 nominales).
  */
 function valueOf(p: Position): number {
-  return p.market_value ?? p.quantity * p.current_price
+  // `||` y no `??`: una posición valuada en 0 no es un dato útil, es una fila
+  // que todavía no sincronizó. Con `??` la cartera entera mostraba $0.
+  return p.market_value || p.quantity * p.current_price
 }
 
 export function withMetrics(positions: Position[]): PositionMetrics[] {

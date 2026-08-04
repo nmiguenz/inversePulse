@@ -1,9 +1,38 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import {
+  createContext,
+  createElement,
+  useCallback,
+  useContext,
+  useEffect,
+  useMemo,
+  useState,
+  type ReactNode,
+} from 'react'
 import { supabase, isSupabaseConfigured } from '@/lib/supabase'
 import { useAuth } from '@/lib/auth'
 import type { Alert } from '@/lib/types'
 
-export function useAlerts() {
+type AlertsState = {
+  alerts: Alert[]
+  unreadCount: number
+  loading: boolean
+  markRead: (id: string) => Promise<void>
+  markAllRead: () => Promise<void>
+  dismiss: (id: string) => Promise<void>
+  reload: () => Promise<void>
+}
+
+const AlertsContext = createContext<AlertsState | null>(null)
+
+/**
+ * Provider único para las alertas.
+ *
+ * El AppShell (badge counter) y la pantalla de alertas necesitan los mismos
+ * datos. Con un hook suelto, cada uno abría su propio canal de realtime con el
+ * MISMO nombre (`alerts:<user>`) y duplicaba las queries; dos canales con el
+ * mismo topic se pisan entre sí. Acá hay una sola suscripción compartida.
+ */
+export function AlertsProvider({ children }: { children: ReactNode }) {
   const { session } = useAuth()
   const userId = session?.user.id
   const [alerts, setAlerts] = useState<Alert[]>([])
@@ -15,7 +44,7 @@ export function useAlerts() {
       return
     }
 
-    const { data } = await supabase
+    const { data, error } = await supabase
       .from('alerts')
       .select('*')
       .eq('user_id', userId)
@@ -23,6 +52,7 @@ export function useAlerts() {
       .order('created_at', { ascending: false })
       .limit(100)
 
+    if (error) console.error('[alerts] no se pudieron cargar:', error.message)
     setAlerts((data ?? []) as Alert[])
     setLoading(false)
   }, [userId])
@@ -48,24 +78,44 @@ export function useAlerts() {
     }
   }, [userId, load])
 
-  const unreadCount = useMemo(() => alerts.filter((a) => !a.is_read).length, [alerts])
+  const value = useMemo<AlertsState>(() => {
+    const markRead = async (id: string) => {
+      // Optimista: la UI no espera el round trip
+      setAlerts((prev) => prev.map((a) => (a.id === id ? { ...a, is_read: true } : a)))
+      await supabase.from('alerts').update({ is_read: true }).eq('id', id)
+    }
 
-  const markRead = useCallback(async (id: string) => {
-    // Optimista: la UI no espera al round trip
-    setAlerts((prev) => prev.map((a) => (a.id === id ? { ...a, is_read: true } : a)))
-    await supabase.from('alerts').update({ is_read: true }).eq('id', id)
-  }, [])
+    const markAllRead = async () => {
+      if (!userId) return
+      setAlerts((prev) => prev.map((a) => ({ ...a, is_read: true })))
+      await supabase
+        .from('alerts')
+        .update({ is_read: true })
+        .eq('user_id', userId)
+        .eq('is_read', false)
+    }
 
-  const markAllRead = useCallback(async () => {
-    if (!userId) return
-    setAlerts((prev) => prev.map((a) => ({ ...a, is_read: true })))
-    await supabase.from('alerts').update({ is_read: true }).eq('user_id', userId).eq('is_read', false)
-  }, [userId])
+    const dismiss = async (id: string) => {
+      setAlerts((prev) => prev.filter((a) => a.id !== id))
+      await supabase.from('alerts').update({ is_dismissed: true }).eq('id', id)
+    }
 
-  const dismiss = useCallback(async (id: string) => {
-    setAlerts((prev) => prev.filter((a) => a.id !== id))
-    await supabase.from('alerts').update({ is_dismissed: true }).eq('id', id)
-  }, [])
+    return {
+      alerts,
+      unreadCount: alerts.filter((a) => !a.is_read).length,
+      loading,
+      markRead,
+      markAllRead,
+      dismiss,
+      reload: load,
+    }
+  }, [alerts, loading, userId, load])
 
-  return { alerts, unreadCount, loading, markRead, markAllRead, dismiss, reload: load }
+  return createElement(AlertsContext.Provider, { value }, children)
+}
+
+export function useAlerts(): AlertsState {
+  const ctx = useContext(AlertsContext)
+  if (!ctx) throw new Error('useAlerts debe usarse dentro de <AlertsProvider>')
+  return ctx
 }

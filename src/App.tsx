@@ -1,5 +1,7 @@
 import { Navigate, Route, Routes } from 'react-router-dom'
 import { AppShell } from '@/components/layout/AppShell'
+import { ErrorBoundary } from '@/components/ErrorBoundary'
+import { AlertsProvider } from '@/hooks/useAlerts'
 import { AuthProvider, useAuth } from '@/lib/auth'
 import { Dashboard } from '@/pages/Dashboard'
 import { Alerts } from '@/pages/Alerts'
@@ -22,23 +24,27 @@ function Gate() {
   if (!session) return <Login />
 
   return (
-    <Routes>
-      <Route element={<AppShell />}>
-        <Route index element={<Dashboard />} />
-        <Route path="alertas" element={<Alerts />} />
-        <Route path="oportunidades" element={<Opportunities />} />
-        <Route path="noticias" element={<News />} />
-        <Route path="config" element={<Settings />} />
-        <Route path="*" element={<Navigate to="/" replace />} />
-      </Route>
-    </Routes>
+    <AlertsProvider>
+      <Routes>
+        <Route element={<AppShell />}>
+          <Route index element={<Dashboard />} />
+          <Route path="alertas" element={<Alerts />} />
+          <Route path="oportunidades" element={<Opportunities />} />
+          <Route path="noticias" element={<News />} />
+          <Route path="config" element={<Settings />} />
+          <Route path="*" element={<Navigate to="/" replace />} />
+        </Route>
+      </Routes>
+    </AlertsProvider>
   )
 }
 
 export default function App() {
   return (
-    <AuthProvider>
-      <Gate />
-    </AuthProvider>
+    <ErrorBoundary>
+      <AuthProvider>
+        <Gate />
+      </AuthProvider>
+    </ErrorBoundary>
   )
 }
