@@ -42,6 +42,31 @@ export type PricePoint = {
   recorded_at: string
 }
 
+export type Sentiment = 'positive' | 'negative' | 'neutral'
+export type ImpactLevel = 'high' | 'medium' | 'low'
+
+export type NewsItem = {
+  id: string
+  title: string
+  source: string
+  url: string | null
+  summary: string | null
+  sentiment: Sentiment | null
+  impact_level: ImpactLevel | null
+  related_symbols: string[] | null
+  tags: string[] | null
+  published_at: string | null
+  created_at: string
+}
+
+export type WorldTopic = {
+  slug: string
+  label: string
+  emoji: string | null
+  description: string | null
+  sort_order: number
+}
+
 export type AlertSeverity = 'critical' | 'warning' | 'info' | 'opportunity'
 
 export type Alert = {

@@ -1,4 +1,5 @@
 import { useMemo } from 'react'
+import { useNavigate } from 'react-router-dom'
 import { Card, EmptyState, SectionTitle } from '@/components/ui/Card'
 import { MetricCard } from '@/components/ui/MetricCard'
 import { TagPill } from '@/components/ui/Badge'
@@ -10,16 +11,18 @@ import { dayChange, fastestLiquidity, sectorBreakdown, totalValue, worstPosition
 import { formatARS, formatCompactARS, formatPct, formatSignedARS, toneOf, toneText } from '@/lib/format'
 import { RESCUE_LABEL } from '@/lib/sectors'
 
+/** Los slugs coinciden con world_topics.slug — el tap abre el feed ya filtrado */
 const topics = [
-  { emoji: '🤖', label: 'IA y Semis' },
-  { emoji: '🏦', label: 'Fed y Tasas' },
-  { emoji: '🛢️', label: 'Petróleo' },
-  { emoji: '💵', label: 'Dólar AR' },
-  { emoji: '📊', label: 'Earnings' },
-  { emoji: '🇨🇳', label: 'China' },
+  { emoji: '🤖', label: 'IA y Semis', slug: 'ia-semiconductores' },
+  { emoji: '🏦', label: 'Fed y Tasas', slug: 'fed-tasas' },
+  { emoji: '🛢️', label: 'Petróleo', slug: 'petroleo-geopolitica' },
+  { emoji: '💵', label: 'Dólar AR', slug: 'dolar-argentina' },
+  { emoji: '📊', label: 'Earnings', slug: 'earnings-season' },
+  { emoji: '🇨🇳', label: 'China', slug: 'china-trade' },
 ]
 
 export function Dashboard() {
+  const navigate = useNavigate()
   const { positions, balance, latestRates, historyBySymbol, iolStatus, loading, error } =
     usePortfolio()
 
@@ -177,7 +180,12 @@ export function Dashboard() {
         <SectionTitle icon="🌍">Temáticas mundiales</SectionTitle>
         <div className="no-scrollbar -mx-4 flex gap-2 overflow-x-auto px-4 pb-1">
           {topics.map((t) => (
-            <TagPill key={t.label} emoji={t.emoji} label={t.label} />
+            <TagPill
+              key={t.slug}
+              emoji={t.emoji}
+              label={t.label}
+              onClick={() => navigate(`/noticias?tag=${t.slug}`)}
+            />
           ))}
         </div>
       </div>

@@ -123,11 +123,31 @@ service worker quede cacheado.
 
 Recién con HTTPS se pueden probar las push notifications en el celular.
 
-## Próximo — Fase 4
+## Estado — Fase 4 ✅
 
-- RSS fetcher + análisis de noticias con Claude API
-- Feed de noticias filtrable por las temáticas mundiales
-- Alertas por noticias negativas sobre activos en cartera
+- Edge Function `fetch-news`: RSS → pre-filtro por keywords → análisis con Claude → alertas
+- Feed de noticias filtrable por temática; los tags del Dashboard abren el feed ya filtrado
+- Alertas + push por noticias negativas de alto impacto sobre activos en cartera
+
+### Costo
+
+El spec proponía una llamada a Claude por noticia. Medido sobre los feeds reales, eso serían
+~290 llamadas por corrida. Con el pre-filtro por las keywords de `world_topics` **antes** de
+tocar la API, sobrevive ~26% y se agrupan de a 10 por request: **~8 llamadas en la primera
+corrida**, y bastante menos en las siguientes porque `news.url` es `UNIQUE` y nada se analiza
+dos veces.
+
+Otras medidas: `thinking: disabled` + `effort: low` (en Sonnet 5 el thinking adaptativo está
+activo por defecto si no se configura) y un tope de 40 noticias analizadas por corrida.
+
+Para medir el ratio con datos frescos, la respuesta de la function trae `stats.fetched` vs
+`stats.analyzed`: si se parecen, el pre-filtro dejó de filtrar.
+
+## Próximo — Fase 5
+
+- `analyze-opportunities` con Claude Opus 5 (razonamiento sobre decisiones de inversión)
+- Cards de oportunidades con growth estimate y horizonte temporal
+- Earnings calendar y recordatorios
 
 ## Notas
 

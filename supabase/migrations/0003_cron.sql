@@ -70,6 +70,20 @@ SELECT cron.schedule(
   $$
 );
 
+-- fetch-news: cada 30 min. Corre todo el día, no solo en horario de mercado:
+-- las noticias que mueven precios salen fuera de rueda.
+SELECT cron.schedule(
+  'fetch-news',
+  '*/30 * * * *',
+  $$
+  SELECT net.http_post(
+    url := 'https://kfxnspxwmcepgzqycjfa.supabase.co/functions/v1/fetch-news',
+    headers := cron_auth_headers(),
+    timeout_milliseconds := 120000
+  );
+  $$
+);
+
 -- Ver estado / revisar corridas / borrar:
 --   SELECT jobid, jobname, schedule, active FROM cron.job;
 --   SELECT * FROM cron.job_run_details ORDER BY start_time DESC LIMIT 20;
