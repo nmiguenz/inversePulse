@@ -97,10 +97,37 @@ key, y correrlo en el SQL Editor para programar los CRON (los horarios están en
 `SUPABASE_URL` y `SUPABASE_SERVICE_ROLE_KEY` ya vienen inyectadas en el runtime de las
 functions; no hace falta setearlas como secrets.
 
-## Próximo — Fase 3
+## CRON
 
-- `evaluate-alerts` + push notifications con VAPID
-- Lista de alertas con filtros, swipe dismiss y badge counter real en la bottom nav
+Los jobs están en [supabase/migrations/0003_cron.sql](supabase/migrations/0003_cron.sql).
+La service role key **no está en el archivo**: se guarda cifrada en Vault y el job la lee
+en cada corrida. Antes de correr esa migración, una sola vez:
+
+```sql
+select vault.create_secret('<SERVICE_ROLE_KEY>', 'service_role_key');
+```
+
+## Deploy a Vercel
+
+1. Subir el repo a GitHub (**privado** — el proyecto expone la estructura de la cartera).
+2. Vercel → Add New → Project → importar el repo. Detecta Vite solo; no hay que tocar
+   build command ni output directory.
+3. Cargar las env vars (Settings → Environment Variables), las mismas del `.env.local`:
+   `VITE_SUPABASE_URL`, `VITE_SUPABASE_ANON_KEY`, `VITE_VAPID_PUBLIC_KEY`.
+   Las de IOL y la VAPID privada **no** van acá: viven en los secrets de Supabase.
+4. Supabase → Authentication → URL Configuration: cambiar Site URL al dominio de Vercel
+   y agregar `https://<dominio>/**` a Redirect URLs (dejar también el de localhost).
+
+[vercel.json](vercel.json) resuelve el rewrite de SPA para React Router y evita que el
+service worker quede cacheado.
+
+Recién con HTTPS se pueden probar las push notifications en el celular.
+
+## Próximo — Fase 4
+
+- RSS fetcher + análisis de noticias con Claude API
+- Feed de noticias filtrable por las temáticas mundiales
+- Alertas por noticias negativas sobre activos en cartera
 
 ## Notas
 
