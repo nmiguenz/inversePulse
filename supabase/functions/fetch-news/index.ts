@@ -73,7 +73,16 @@ Deno.serve(async (req) => {
   const holdings = [...new Set((positions ?? []).map((p) => p.symbol))]
 
   // ---------- 1. Bajar los feeds ----------
-  const stats = { fetched: 0, alreadyKnown: 0, filteredOut: 0, analyzed: 0, inserted: 0, alerts: 0 }
+  const stats = {
+    fetched: 0,
+    alreadyKnown: 0,
+    filteredOut: 0,
+    relevant: 0,
+    sentToClaude: 0,
+    analyzed: 0,
+    inserted: 0,
+    alerts: 0,
+  }
   const sourceResults: Record<string, string> = {}
   const candidates: Array<FeedItem & { source: string }> = []
 
@@ -115,11 +124,13 @@ Deno.serve(async (req) => {
   stats.filteredOut = fresh.length - relevant.length
 
   const toAnalyze = relevant.slice(0, MAX_ANALYZE_PER_RUN)
-  stats.analyzed = toAnalyze.length
+  stats.relevant = relevant.length
+  stats.sentToClaude = toAnalyze.length
 
   // ---------- 4. Analizar en lotes ----------
   const analyzedRows: Array<Record<string, unknown>> = []
   const alertPayloads: Array<{ analysis: NewsAnalysis; item: FeedItem & { source: string } }> = []
+  const errors: string[] = []
 
   for (let i = 0; i < toAnalyze.length; i += BATCH_SIZE) {
     const batch = toAnalyze.slice(i, i + BATCH_SIZE)
@@ -133,8 +144,12 @@ Deno.serve(async (req) => {
     let analyses: NewsAnalysis[] = []
     try {
       analyses = await analyzeNews(inputs, topics, holdings)
+      stats.analyzed += analyses.length
     } catch (err) {
-      console.error('[fetch-news] análisis falló:', err instanceof Error ? err.message : err)
+      // Un lote que falla no debe desaparecer sin dejar rastro en la respuesta
+      const message = err instanceof Error ? err.message : String(err)
+      errors.push(message)
+      console.error('[fetch-news] análisis falló:', message)
       continue
     }
 
@@ -164,8 +179,12 @@ Deno.serve(async (req) => {
 
   if (analyzedRows.length) {
     const { error } = await db.from('news').upsert(analyzedRows, { onConflict: 'url' })
-    if (error) console.error('[fetch-news] insert:', error.message)
-    else stats.inserted = analyzedRows.length
+    if (error) {
+      errors.push(`insert: ${error.message}`)
+      console.error('[fetch-news] insert:', error.message)
+    } else {
+      stats.inserted = analyzedRows.length
+    }
   }
 
   // ---------- 5. Alertas por noticias negativas sobre activos en cartera ----------
@@ -227,7 +246,12 @@ Deno.serve(async (req) => {
     }
   }
 
-  // `analyzed` sobre `fetched` es la métrica de costo: si se parecen, el
+  // `sentToClaude` sobre `fetched` es la métrica de costo: si se parecen, el
   // pre-filtro no está filtrando y hay que revisar las keywords.
-  return Response.json({ ok: true, stats, sources: sourceResults })
+  return Response.json({
+    ok: errors.length === 0,
+    stats,
+    sources: sourceResults,
+    ...(errors.length ? { errors: errors.slice(0, 5) } : {}),
+  })
 })
