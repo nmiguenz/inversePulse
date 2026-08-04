@@ -42,6 +42,26 @@ export type PricePoint = {
   recorded_at: string
 }
 
+export type Confidence = 'high' | 'medium' | 'low'
+export type TimeHorizon = 'short' | 'medium' | 'long'
+
+export type Opportunity = {
+  id: string
+  symbol: string
+  opportunity_type: string
+  title: string
+  reasoning: string
+  growth_estimate_pct: number | null
+  confidence: Confidence | null
+  time_horizon: TimeHorizon | null
+  current_price: number | null
+  target_price: number | null
+  already_owned: boolean | null
+  is_active: boolean
+  expires_at: string | null
+  created_at: string
+}
+
 export type Sentiment = 'positive' | 'negative' | 'neutral'
 export type ImpactLevel = 'high' | 'medium' | 'low'
 

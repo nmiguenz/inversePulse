@@ -84,6 +84,25 @@ SELECT cron.schedule(
   $$
 );
 
+-- analyze-opportunities: 11:00 y 16:00 ART (14:00 y 19:00 UTC), lun-vie.
+--
+-- El spec pedía "cada 1 hora", pero las oportunidades que genera tienen
+-- horizonte de semanas a meses. Correr un modelo Opus 24 veces por día para
+-- revisar tesis a ese plazo cuesta ~US$65/mes y no cambia las conclusiones.
+-- Dos corridas — una con el mercado abierto, otra a media rueda — alcanzan.
+-- La function además se saltea sola si no entraron noticias nuevas.
+SELECT cron.schedule(
+  'analyze-opportunities',
+  '0 14,19 * * 1-5',
+  $$
+  SELECT net.http_post(
+    url := 'https://kfxnspxwmcepgzqycjfa.supabase.co/functions/v1/analyze-opportunities',
+    headers := cron_auth_headers(),
+    timeout_milliseconds := 180000
+  );
+  $$
+);
+
 -- Ver estado / revisar corridas / borrar:
 --   SELECT jobid, jobname, schedule, active FROM cron.job;
 --   SELECT * FROM cron.job_run_details ORDER BY start_time DESC LIMIT 20;
