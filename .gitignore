@@ -1,0 +1,21 @@
+node_modules
+dist
+dist-ssr
+*.local
+.env
+.env.*
+!.env.example
+
+# PWA generado
+dev-dist
+public/sw.js
+public/workbox-*.js
+
+# Supabase CLI: estado local del link (el pooler-url lleva credenciales)
+supabase/.temp/
+supabase/.branches/
+
+.DS_Store
+.vscode/*
+!.vscode/extensions.json
+*.tsbuildinfo

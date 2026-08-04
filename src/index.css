@@ -1,0 +1,125 @@
+@import 'tailwindcss';
+
+/* ============================================
+   Design System — IOL Portfolio Monitor
+   Dashboard financiero oscuro, mobile first (375px)
+   ============================================ */
+
+@theme {
+  /* Backgrounds */
+  --color-base: #06060a; /* Fondo principal — casi negro con tinte azul */
+  --color-surface: #0e0e14; /* Cards y contenedores */
+  --color-elevated: #161620; /* Elementos elevados, modals */
+  --color-hover: #1c1c28; /* Hover states */
+
+  /* Borders */
+  --color-subtle: rgba(255, 255, 255, 0.05);
+  --color-line: rgba(255, 255, 255, 0.08);
+  --color-strong: rgba(255, 255, 255, 0.12);
+
+  /* Text */
+  --color-primary: #eeeef4;
+  --color-secondary: #8888a0;
+  --color-muted: #555568;
+
+  /* Semantic */
+  --color-gain: #00e68a;
+  --color-loss: #ff4757;
+  --color-warning: #ffb020;
+  --color-info: #4da6ff;
+  --color-accent: #8b5cf6;
+
+  /* Tipografía */
+  --font-display: 'Space Grotesk', ui-sans-serif, system-ui, sans-serif;
+  --font-body: 'Inter', ui-sans-serif, system-ui, sans-serif;
+  --font-mono: 'JetBrains Mono', ui-monospace, monospace;
+
+  /* Animaciones */
+  --animate-fade-up: fade-up 0.24s ease-out both;
+
+  @keyframes fade-up {
+    from {
+      opacity: 0;
+      transform: translateY(6px);
+    }
+    to {
+      opacity: 1;
+      transform: none;
+    }
+  }
+}
+
+:root {
+  /* Gradients y glows — no son utilidades de Tailwind, se usan como var() */
+  --gradient-gain: linear-gradient(135deg, #00e68a 0%, #00b368 100%);
+  --gradient-loss: linear-gradient(135deg, #ff4757 0%, #cc3a47 100%);
+  --gradient-accent: linear-gradient(135deg, #8b5cf6 0%, #6d3ae8 100%);
+  --glow-gain: 0 0 20px rgba(0, 230, 138, 0.15);
+  --glow-loss: 0 0 20px rgba(255, 71, 87, 0.15);
+
+  /* Alturas de chrome fijo (para paddings seguros) */
+  --topbar-h: 56px;
+  --bottomnav-h: 60px;
+
+  color-scheme: dark;
+}
+
+@layer base {
+  html {
+    -webkit-tap-highlight-color: transparent;
+    -webkit-text-size-adjust: 100%;
+  }
+
+  body {
+    @apply bg-base text-primary font-body antialiased;
+    /* Evita rebote horizontal en mobile */
+    overflow-x: hidden;
+    overscroll-behavior-y: none;
+  }
+
+  /* Números financieros: tabulares siempre */
+  .tnum {
+    font-variant-numeric: tabular-nums;
+    font-feature-settings: 'tnum';
+  }
+
+  ::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+  }
+  ::-webkit-scrollbar-thumb {
+    background: var(--color-strong);
+    border-radius: 999px;
+  }
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+}
+
+@utility glow-gain {
+  box-shadow: var(--glow-gain);
+}
+
+@utility glow-loss {
+  box-shadow: var(--glow-loss);
+}
+
+@utility gradient-accent {
+  background-image: var(--gradient-accent);
+}
+
+@utility gradient-gain {
+  background-image: var(--gradient-gain);
+}
+
+@utility gradient-loss {
+  background-image: var(--gradient-loss);
+}
+
+/* Scroll horizontal sin scrollbar (chips de temáticas) */
+@utility no-scrollbar {
+  scrollbar-width: none;
+  &::-webkit-scrollbar {
+    display: none;
+  }
+}
