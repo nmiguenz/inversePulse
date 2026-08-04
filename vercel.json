@@ -1,16 +1,9 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "framework": "vite",
-  "rewrites": [
-    {
-      "comment": "SPA: cualquier ruta que no sea un archivo real la resuelve React Router",
-      "source": "/((?!assets/).*)",
-      "destination": "/index.html"
-    }
-  ],
+  "rewrites": [{ "source": "/((?!assets/).*)", "destination": "/index.html" }],
   "headers": [
     {
-      "comment": "El service worker nunca se cachea: si queda pegado, el usuario no recibe updates",
       "source": "/sw.js",
       "headers": [{ "key": "Cache-Control", "value": "public, max-age=0, must-revalidate" }]
     },
