@@ -126,6 +126,20 @@ SELECT cron.schedule(
   $$
 );
 
+-- earnings-reminder: todos los días a las 9:00 ART (12:00 UTC).
+-- Barato: no llama a ninguna API paga, solo lee el calendario cargado a mano.
+SELECT cron.schedule(
+  'earnings-reminder',
+  '0 12 * * *',
+  $$
+  SELECT net.http_post(
+    url := 'https://kfxnspxwmcepgzqycjfa.supabase.co/functions/v1/earnings-reminder',
+    headers := cron_auth_headers(),
+    timeout_milliseconds := 30000
+  );
+  $$
+);
+
 -- Ver estado / revisar corridas / borrar:
 --   SELECT jobid, jobname, schedule, active FROM cron.job;
 --   SELECT * FROM cron.job_run_details ORDER BY start_time DESC LIMIT 20;

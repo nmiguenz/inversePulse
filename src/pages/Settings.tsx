@@ -3,6 +3,7 @@ import { Card, SectionTitle } from '@/components/ui/Card'
 import { IconChevronRight } from '@/components/ui/Icon'
 import { useAuth } from '@/lib/auth'
 import { currentSubscription, pushSupported, subscribeToPush, unsubscribeFromPush } from '@/lib/push'
+import { EarningsManager } from '@/components/settings/EarningsManager'
 
 const rows = [
   { label: 'Umbrales de alerta', hint: 'Take profit, stop loss, rebalanceo' },
@@ -82,6 +83,13 @@ export function Settings() {
               Las desbloqueás desde el candado en la barra de direcciones del navegador.
             </p>
           )}
+        </Card>
+      </div>
+
+      <div>
+        <SectionTitle icon="📊">Calendario de earnings</SectionTitle>
+        <Card>
+          <EarningsManager />
         </Card>
       </div>
 
