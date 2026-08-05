@@ -15,14 +15,14 @@ export function MetricCard({ label, value, subLabel, tone, size = 'md' }: Metric
   const glow = resolved === 'gain' ? 'glow-gain' : resolved === 'loss' ? 'glow-loss' : ''
 
   return (
-    <div className={`border-subtle bg-surface rounded-2xl border p-4 ${glow}`}>
-      <p className="text-muted font-mono text-[11px] tracking-[0.1em] uppercase">{label}</p>
+    <div className={`card p-5 ${glow}`}>
+      <p className="text-secondary text-[12px]">{label}</p>
       <p
-        className={`font-display tnum mt-1.5 font-bold ${size === 'lg' ? 'text-[28px]' : 'text-[19px]'} leading-none ${toneText[resolved]} ${resolved === 'neutral' ? 'text-primary' : ''}`}
+        className={`font-display tnum mt-1.5 font-bold ${size === 'lg' ? 'text-[30px]' : 'text-[20px]'} leading-none ${toneText[resolved]} ${resolved === 'neutral' ? 'text-primary' : ''}`}
       >
         {value}
       </p>
-      {subLabel && <p className="text-secondary mt-1.5 text-[12px]">{subLabel}</p>}
+      {subLabel && <p className="text-muted mt-1.5 text-[12px]">{subLabel}</p>}
     </div>
   )
 }

@@ -19,7 +19,7 @@ export function TopBar({ title, subtitle, alertCount = 0 }: TopBarProps) {
         <div className="min-w-0">
           <h1 className="font-display truncate text-[15px] leading-tight font-semibold">{title}</h1>
           {subtitle && (
-            <p className="text-muted truncate font-mono text-[10px] tracking-wide uppercase">
+            <p className="text-muted truncate text-[11px]">
               {subtitle}
             </p>
           )}

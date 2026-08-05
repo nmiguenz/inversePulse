@@ -121,7 +121,7 @@ export function ThresholdSettings() {
       })}
 
       <div className="border-subtle border-t pt-4">
-        <p className="text-secondary mb-3 font-mono text-[11px] tracking-wider uppercase">
+        <p className="text-secondary mb-3 text-[12px] font-medium">
           Qué te notifica
         </p>
         {TOGGLES.map((toggle) => (
@@ -144,7 +144,7 @@ export function ThresholdSettings() {
       </div>
 
       <div className="border-subtle border-t pt-4">
-        <p className="text-secondary mb-2 font-mono text-[11px] tracking-wider uppercase">
+        <p className="text-secondary mb-2 text-[12px] font-medium">
           Horario de monitoreo
         </p>
         <div className="flex items-center gap-2">

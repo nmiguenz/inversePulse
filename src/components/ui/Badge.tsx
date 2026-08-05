@@ -12,7 +12,7 @@ const styles: Record<Severity, string> = {
 export function AlertBadge({ severity, children }: { severity: Severity; children: ReactNode }) {
   return (
     <span
-      className={`inline-flex items-center gap-1 rounded-full border px-2.5 py-0.5 font-mono text-[10px] font-medium tracking-wide uppercase ${styles[severity]}`}
+      className={`inline-flex items-center gap-1 rounded-full border px-2.5 py-0.5 text-[11px] font-medium ${styles[severity]}`}
     >
       {children}
     </span>

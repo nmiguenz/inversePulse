@@ -99,7 +99,9 @@
 
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme='light']) {
-    --shadow-card: none;
+    /* Sombra transparente en vez de `none`: las utilidades glow-* la componen
+       en una lista de box-shadow, y `none` dentro de una lista es inválido */
+    --shadow-card: 0 0 #0000;
   }
 }
 
@@ -152,12 +154,14 @@
   box-shadow: var(--shadow-card);
 }
 
+/* El glow se compone con la sombra de la card en vez de reemplazarla, para que
+   una MetricCard con glow no pierda la profundidad del resto */
 @utility glow-gain {
-  box-shadow: var(--glow-gain);
+  box-shadow: var(--glow-gain), var(--shadow-card);
 }
 
 @utility glow-loss {
-  box-shadow: var(--glow-loss);
+  box-shadow: var(--glow-loss), var(--shadow-card);
 }
 
 @utility gradient-accent {

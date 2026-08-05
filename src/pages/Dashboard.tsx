@@ -201,7 +201,7 @@ export function Dashboard() {
       <div>
         <SectionTitle icon="📈">Posiciones</SectionTitle>
         <Card className="p-0">
-          <div className="text-muted border-subtle grid grid-cols-[1fr_auto_auto] gap-3 border-b px-4 py-2.5 font-mono text-[10px] tracking-wider uppercase">
+          <div className="text-muted border-subtle grid grid-cols-[1fr_auto_auto] gap-3 border-b px-4 py-2.5 text-[11px]">
             <span>Activo</span>
             <span className="w-16 text-center">30 días</span>
             <span className="w-[68px] text-right">Día · P/L</span>
@@ -242,7 +242,7 @@ export function Dashboard() {
       </div>
 
       {iolStatus?.last_sync_at && (
-        <p className="text-muted pt-1 text-center font-mono text-[10px] tracking-wide uppercase">
+        <p className="text-muted pt-1 text-center text-[11px]">
           Último sync{' '}
           {new Date(iolStatus.last_sync_at).toLocaleTimeString('es-AR', {
             hour: '2-digit',
@@ -257,12 +257,12 @@ export function Dashboard() {
 function DashboardSkeleton() {
   return (
     <div className="space-y-4">
-      <div className="bg-surface border-subtle h-[104px] animate-pulse rounded-2xl border" />
+      <div className="card h-[104px] animate-pulse" />
       <div className="grid grid-cols-2 gap-3">
-        <div className="bg-surface border-subtle h-[92px] animate-pulse rounded-2xl border" />
-        <div className="bg-surface border-subtle h-[92px] animate-pulse rounded-2xl border" />
+        <div className="card h-[92px] animate-pulse" />
+        <div className="card h-[92px] animate-pulse" />
       </div>
-      <div className="bg-surface border-subtle h-[240px] animate-pulse rounded-2xl border" />
+      <div className="card h-[240px] animate-pulse" />
     </div>
   )
 }

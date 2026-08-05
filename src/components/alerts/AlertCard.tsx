@@ -57,7 +57,7 @@ export function AlertCard({
     <li className="relative overflow-hidden rounded-2xl">
       {/* Fondo que se revela al deslizar */}
       <div className="absolute inset-0 flex items-center justify-end rounded-2xl bg-loss-soft pr-5">
-        <span className="text-loss font-mono text-[11px] tracking-wider uppercase">Descartar</span>
+        <span className="text-loss text-[12px] font-medium">Descartar</span>
       </div>
 
       <article
@@ -69,7 +69,7 @@ export function AlertCard({
           transform: `translateX(${offset}px)`,
           transition: offset === 0 || leaving ? 'transform 0.18s ease-out' : 'none',
         }}
-        className={`border-subtle bg-surface relative rounded-2xl border p-4 ${
+        className={`card relative p-5 ${
           alert.is_read ? '' : 'border-l-accent border-l-[3px]'
         }`}
       >
@@ -88,7 +88,7 @@ export function AlertCard({
         <footer className="mt-3 flex items-center gap-2">
           <AlertBadge severity={alert.severity}>{SEVERITY_LABEL[alert.severity]}</AlertBadge>
           {alert.action_suggested && (
-            <span className="border-line bg-elevated text-primary rounded-full border px-2.5 py-0.5 font-mono text-[10px]">
+            <span className="border-line bg-elevated text-primary rounded-full border px-2.5 py-0.5 text-[11px]">
               {alert.action_suggested}
             </span>
           )}

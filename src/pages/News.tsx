@@ -63,7 +63,7 @@ export function News() {
       {loading ? (
         <div className="space-y-3">
           {[0, 1, 2].map((i) => (
-            <div key={i} className="bg-surface border-subtle h-[132px] animate-pulse rounded-2xl border" />
+            <div key={i} className="card h-[132px] animate-pulse" />
           ))}
         </div>
       ) : news.length === 0 ? (

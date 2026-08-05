@@ -53,7 +53,7 @@ export function Opportunities() {
     return (
       <div className="space-y-3">
         {[0, 1].map((i) => (
-          <div key={i} className="bg-surface border-subtle h-[180px] animate-pulse rounded-2xl border" />
+          <div key={i} className="card h-[180px] animate-pulse" />
         ))}
       </div>
     )

@@ -41,7 +41,7 @@ export function PortfolioChart({ snapshots }: { snapshots: Snapshot[] }) {
   return (
     <div>
       <div className="mb-3 flex items-baseline justify-between">
-        <p className="text-muted font-mono text-[10px] tracking-wider uppercase">
+        <p className="text-muted text-[11px]">
           {data.length} días
         </p>
         <p className={`tnum font-mono text-[12px] ${toneText[tone]}`}>

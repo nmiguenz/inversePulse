@@ -23,8 +23,8 @@ export function NewsCard({ item, holdings }: { item: NewsItem; holdings: Set<str
   const symbols = item.related_symbols ?? []
 
   return (
-    <li className="border-subtle bg-surface rounded-2xl border p-4">
-      <header className="text-muted flex items-center gap-2 font-mono text-[10px] tracking-wide uppercase">
+    <li className="card p-5">
+      <header className="text-muted flex items-center gap-2 text-[11px]">
         <span>{SOURCE_LABEL[item.source] ?? item.source}</span>
         <span aria-hidden>·</span>
         <time>{formatRelativeTime(item.published_at ?? item.created_at)}</time>
@@ -52,7 +52,7 @@ export function NewsCard({ item, holdings }: { item: NewsItem; holdings: Set<str
 
       <footer className="mt-3 flex flex-wrap items-center gap-2">
         <span
-          className={`rounded-full border px-2.5 py-0.5 font-mono text-[10px] tracking-wide uppercase ${sentiment.className}`}
+          className={`rounded-full border px-2.5 py-0.5 text-[11px] ${sentiment.className}`}
         >
           {sentiment.label}
         </span>
@@ -63,7 +63,7 @@ export function NewsCard({ item, holdings }: { item: NewsItem; holdings: Set<str
           return (
             <span
               key={symbol}
-              className={`rounded-full border px-2.5 py-0.5 font-mono text-[10px] ${
+              className={`rounded-full border px-2.5 py-0.5 text-[11px] ${
                 owned
                   ? 'border-accent bg-accent-soft text-accent'
                   : 'border-line bg-elevated text-muted'

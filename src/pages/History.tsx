@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { Card, EmptyState, SectionTitle } from '@/components/ui/Card'
+import { AssetLogo } from '@/components/ui/AssetLogo'
 import { supabase } from '@/lib/supabase'
 import { useAuth } from '@/lib/auth'
 import { formatARS, formatSignedARS, toneOf, toneText } from '@/lib/format'
@@ -73,7 +74,7 @@ export function History() {
   }
 
   if (loading) {
-    return <div className="bg-surface border-subtle h-40 animate-pulse rounded-2xl border" />
+    return <div className="card h-40 animate-pulse" />
   }
 
   if (!rows.length) {
@@ -92,20 +93,20 @@ export function History() {
     <div className="animate-fade-up space-y-4">
       <div className="grid grid-cols-3 gap-3">
         <Card>
-          <p className="text-muted font-mono text-[10px] tracking-wider uppercase">Compras</p>
-          <p className="font-display tnum text-primary mt-1 text-[15px] font-semibold">
+          <p className="text-secondary text-[12px]">Compras</p>
+          <p className="font-display tnum text-primary mt-1 text-[16px] font-semibold">
             {formatARS(totals.buys)}
           </p>
         </Card>
         <Card>
-          <p className="text-muted font-mono text-[10px] tracking-wider uppercase">Ventas</p>
-          <p className="font-display tnum text-primary mt-1 text-[15px] font-semibold">
+          <p className="text-secondary text-[12px]">Ventas</p>
+          <p className="font-display tnum text-primary mt-1 text-[16px] font-semibold">
             {formatARS(totals.sells)}
           </p>
         </Card>
         <Card>
-          <p className="text-muted font-mono text-[10px] tracking-wider uppercase">Neto</p>
-          <p className={`font-display tnum mt-1 text-[15px] font-semibold ${toneText[toneOf(totals.net)]}`}>
+          <p className="text-secondary text-[12px]">Neto</p>
+          <p className={`font-display tnum mt-1 text-[16px] font-semibold ${toneText[toneOf(totals.net)]}`}>
             {formatSignedARS(totals.net)}
           </p>
         </Card>
@@ -118,16 +119,17 @@ export function History() {
             {rows.map((row) => (
               <li
                 key={row.id}
-                className="border-subtle grid grid-cols-[1fr_auto] items-center gap-3 border-b px-4 py-3 last:border-b-0"
+                className="border-subtle flex items-center gap-3 border-b px-5 py-3.5 last:border-b-0"
               >
-                <div className="min-w-0">
-                  <p className="flex items-center gap-2 font-mono text-[13px] font-semibold">
+                <AssetLogo symbol={row.symbol} size="sm" />
+                <div className="min-w-0 flex-1">
+                  <p className="text-primary flex items-center gap-2 text-[14px] font-semibold">
                     <span className={row.side === 'buy' ? 'text-gain' : 'text-loss'}>
                       {row.side === 'buy' ? 'Compra' : 'Venta'}
                     </span>
                     {row.symbol}
                   </p>
-                  <p className="text-muted tnum mt-0.5 font-mono text-[11px]">
+                  <p className="text-muted tnum mt-0.5 text-[12px]">
                     {row.quantity} × {formatARS(row.price)} ·{' '}
                     {new Date(row.executed_at).toLocaleDateString('es-AR', {
                       day: '2-digit',
@@ -136,7 +138,7 @@ export function History() {
                     })}
                   </p>
                 </div>
-                <span className="tnum text-secondary font-mono text-[12px]">
+                <span className="tnum text-primary text-[13px] font-semibold">
                   {formatARS(Number(row.total))}
                 </span>
               </li>

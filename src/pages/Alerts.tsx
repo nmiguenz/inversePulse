@@ -33,7 +33,7 @@ export function Alerts() {
     return (
       <div className="space-y-3">
         {[0, 1, 2].map((i) => (
-          <div key={i} className="bg-surface border-subtle h-[116px] animate-pulse rounded-2xl border" />
+          <div key={i} className="card h-[116px] animate-pulse" />
         ))}
       </div>
     )
@@ -90,7 +90,7 @@ export function Alerts() {
               <AlertCard key={alert.id} alert={alert} onDismiss={dismiss} onRead={markRead} />
             ))}
           </ul>
-          <p className="text-muted text-center font-mono text-[10px] tracking-wide uppercase">
+          <p className="text-muted text-center text-[11px]">
             Deslizá a la izquierda para descartar
           </p>
         </>

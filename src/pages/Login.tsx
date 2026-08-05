@@ -50,7 +50,7 @@ export function Login() {
 
         {!isSupabaseConfigured ? (
           <div className="border-line bg-surface rounded-2xl border p-4">
-            <p className="text-warning font-mono text-[11px] tracking-wider uppercase">
+            <p className="text-warning text-[12px] font-medium">
               Falta configurar Supabase
             </p>
             <p className="text-secondary mt-2 text-[13px] leading-relaxed">

@@ -19,7 +19,7 @@ export function DollarStrip({ rates }: { rates: Map<string, DollarRate> }) {
       <div className="grid grid-cols-3 gap-3">
         {shown.map((r) => (
           <div key={r.rate_type}>
-            <p className="text-muted font-mono text-[10px] tracking-wider uppercase">
+            <p className="text-muted text-[11px]">
               {LABELS[r.rate_type]}
             </p>
             <p className="font-display tnum text-primary mt-1 text-[17px] font-semibold">
