@@ -41,7 +41,16 @@ BEGIN
 
   IF key IS NULL OR key = '' THEN
     RAISE EXCEPTION
-      'Falta el secret "service_role_key" en Vault. Corré: select vault.create_secret(''<SERVICE_ROLE_KEY>'', ''service_role_key'');';
+      'Falta el secret "service_role_key" en Vault. Guardalo con vault.create_secret() usando la key de Settings → API.';
+  END IF;
+
+  -- Trampa clásica: correr el ejemplo sin reemplazar el placeholder deja
+  -- guardado el texto "<SERVICE_ROLE_KEY>" (18 chars) y todos los jobs se
+  -- van al 401. Una service role key real pasa los 100 caracteres.
+  IF length(key) < 100 THEN
+    RAISE EXCEPTION
+      'El secret "service_role_key" tiene solo % caracteres: parece un placeholder, no la key real. Actualizalo con vault.update_secret().',
+      length(key);
   END IF;
 
   RETURN jsonb_build_object(
