@@ -42,7 +42,9 @@ INSERT INTO asset_metadata (symbol, sector, asset_type, rescue_time, display_nam
   ('JNJ',   'Defensivo',  'CEDEAR', 'T+1', 'Johnson & Johnson'),
   ('PG',    'Defensivo',  'CEDEAR', 'T+1', 'Procter & Gamble'),
   ('WMT',   'Defensivo',  'CEDEAR', 'T+1', 'Walmart'),
-  ('MCD',   'Defensivo',  'CEDEAR', 'T+1', "McDonald's"),
+  -- El apóstrofo se escapa duplicándolo: en Postgres las comillas dobles
+  -- serían un identificador, no un string.
+  ('MCD',   'Defensivo',  'CEDEAR', 'T+1', 'McDonald''s'),
   ('DIS',   'Defensivo',  'CEDEAR', 'T+1', 'Disney'),
   ('JPM',   'Renta Fija', 'CEDEAR', 'T+1', 'JPMorgan Chase'),
   ('BAC',   'Renta Fija', 'CEDEAR', 'T+1', 'Bank of America'),
