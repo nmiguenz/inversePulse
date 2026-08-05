@@ -1,5 +1,6 @@
 import type { Position, PositionMetrics, SectorSlice } from './types'
 import { RESCUE_RANK, sortSectors } from './sectors'
+import { formatPct } from './format'
 
 /**
  * Valor de mercado de una posición.
@@ -71,13 +72,82 @@ export function worstPosition(positions: PositionMetrics[]): PositionMetrics | n
   return losers.reduce((worst, p) => (p.gain < worst.gain ? p : worst))
 }
 
-/** Top 5 para extraer plata: primero por plazo de rescate, después por valuación */
-export function fastestLiquidity(positions: PositionMetrics[], limit = 5): PositionMetrics[] {
-  return [...positions]
+export type SellCandidate = PositionMetrics & {
+  /** Cuánto conviene vender esto, de 0 a ~160 */
+  score: number
+  /** Por qué conviene (o por qué no) */
+  reason: string
+  /** false = vender esto tiene un costo real; no debería sugerirse */
+  advisable: boolean
+}
+
+/**
+ * Punto de partida según qué es el activo.
+ * Un money market es plata estacionada: venderlo no cristaliza nada ni te saca
+ * de una posición. Un CEDEAR sí. Un bono además puede tener spread de salida.
+ */
+const ASSET_BASE: Record<string, number> = { FCI: 100, CEDEAR: 50, ACCION: 50, BONO: 35 }
+
+/** Cuánto suma la rapidez de rescate. */
+const RESCUE_BONUS: Record<string, number> = { 'T+0': 30, 'T+1': 15, 'T+2': 0 }
+
+/**
+ * Ranking de qué conviene vender para hacerse de efectivo.
+ *
+ * El orden anterior era solo "lo más rápido primero, y dentro de eso lo más
+ * grande". Eso responde "qué puedo sacar antes", no "qué me conviene sacar":
+ * ponía arriba una posición en pérdida solo porque liquidaba rápido.
+ *
+ * Ahora se combinan tres cosas:
+ *  · qué es el activo (liquidez estacionada vs una posición de inversión)
+ *  · qué tan rápido entrega la plata
+ *  · qué te cuesta venderlo (pérdida a cristalizar, ganancia a resignar,
+ *    o sobre-ponderación que además te conviene corregir)
+ *
+ * Lo que está en pérdida queda marcado como NO recomendable: venderlo convierte
+ * una pérdida en papel en una pérdida real. Aparece igual, pero separado y
+ * explicando por qué, en vez de esconderlo.
+ */
+export function sellRanking(
+  positions: PositionMetrics[],
+  { rebalancePct = 15 }: { rebalancePct?: number } = {},
+): SellCandidate[] {
+  return positions
+    .map((p): SellCandidate => {
+      const isCash = p.asset_type === 'FCI'
+      let score = ASSET_BASE[p.asset_type] ?? 40
+      score += RESCUE_BONUS[p.rescue_time ?? ''] ?? 0
+
+      let reason: string
+      let advisable = true
+
+      if (isCash) {
+        // No tiene P/L relevante: es plata parada
+        reason = p.rescue_time === 'T+0' ? 'Liquidez, rescate hoy' : 'Liquidez'
+      } else if (p.gainPct < 0) {
+        // Vender acá transforma una pérdida en papel en una pérdida real
+        advisable = false
+        score -= 60 + Math.min(Math.abs(p.gainPct), 30)
+        reason = `En pérdida ${formatPct(p.gainPct, 1)} — cristalizarías la pérdida`
+      } else if (p.weight >= rebalancePct) {
+        // Doblemente bueno: hacés caja y de paso corregís la concentración
+        score += 25
+        reason = `Sobre-ponderada: ${p.weight.toFixed(1)}% de la cartera`
+      } else {
+        // Ganancia realizable, pero resignás la posición
+        score += Math.min(p.gainPct, 20) / 2
+        reason = `Ganancia realizable ${formatPct(p.gainPct, 1)}`
+      }
+
+      return { ...p, score, reason, advisable }
+    })
     .sort((a, b) => {
+      // Lo no recomendable siempre al fondo, sin importar el score
+      if (a.advisable !== b.advisable) return a.advisable ? -1 : 1
+      if (Math.abs(b.score - a.score) > 0.5) return b.score - a.score
+      // Empate: primero lo que entrega antes, después lo más grande
       const rankA = RESCUE_RANK[a.rescue_time ?? ''] ?? 9
       const rankB = RESCUE_RANK[b.rescue_time ?? ''] ?? 9
       return rankA !== rankB ? rankA - rankB : b.value - a.value
     })
-    .slice(0, limit)
 }

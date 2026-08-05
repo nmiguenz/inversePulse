@@ -7,7 +7,9 @@ import { SectorDonut } from '@/components/dashboard/SectorDonut'
 import { PositionRow } from '@/components/dashboard/PositionRow'
 import { DollarStrip } from '@/components/dashboard/DollarStrip'
 import { usePortfolio } from '@/hooks/usePortfolio'
-import { dayChange, fastestLiquidity, sectorBreakdown, totalValue, worstPosition } from '@/lib/portfolio'
+import { usePullToRefresh } from '@/hooks/usePullToRefresh'
+import { PullIndicator } from '@/components/ui/PullIndicator'
+import { dayChange, sectorBreakdown, sellRanking, totalValue, worstPosition } from '@/lib/portfolio'
 import { formatARS, formatCompactARS, formatPct, formatSignedARS, toneOf, toneText } from '@/lib/format'
 import { RESCUE_LABEL } from '@/lib/sectors'
 
@@ -23,15 +25,17 @@ const topics = [
 
 export function Dashboard() {
   const navigate = useNavigate()
-  const { positions, balance, latestRates, historyBySymbol, iolStatus, loading, error } =
+  const { positions, balance, latestRates, historyBySymbol, iolStatus, loading, error, reload } =
     usePortfolio()
+
+  const { pull, refreshing, ready } = usePullToRefresh(reload)
 
   const derived = useMemo(
     () => ({
       total: totalValue(positions),
       day: dayChange(positions),
       sectors: sectorBreakdown(positions),
-      liquidity: fastestLiquidity(positions),
+      sellOrder: sellRanking(positions),
       worst: worstPosition(positions),
     }),
     [positions],
@@ -68,6 +72,8 @@ export function Dashboard() {
 
   return (
     <div className="animate-fade-up space-y-4">
+      <PullIndicator pull={pull} refreshing={refreshing} ready={ready} />
+
       {error && (
         <p className="border-line bg-surface text-warning rounded-xl border px-4 py-2.5 text-[12px]">
           {error}
@@ -126,32 +132,55 @@ export function Dashboard() {
         </Card>
       </div>
 
-      {/* Liquidez rápida */}
+      {/* Qué conviene vender */}
       <div>
-        <SectionTitle icon="💰">Liquidez rápida — top 5</SectionTitle>
+        <SectionTitle icon="💰">Si necesitás efectivo</SectionTitle>
         <Card className="p-0">
           <ul>
-            {derived.liquidity.map((p, i) => (
+            {derived.sellOrder.filter((p) => p.advisable).map((p, i) => (
               <li
                 key={p.id}
-                className="border-subtle flex items-center gap-3 border-b px-4 py-3 last:border-b-0"
+                className="border-subtle border-b px-4 py-3 last:border-b-0"
               >
-                <span className="text-muted w-3 font-mono text-[12px]">{i + 1}</span>
-                <span className="flex-1 font-mono text-[13px] font-semibold">{p.symbol}</span>
-                <span className="tnum text-secondary font-mono text-[12px]">
-                  {formatCompactARS(p.value)}
-                </span>
-                <span
-                  className={`w-24 text-right font-mono text-[11px] ${
-                    p.rescue_time === 'T+0' ? 'text-gain' : 'text-warning'
-                  }`}
-                >
-                  {p.rescue_time} · {RESCUE_LABEL[p.rescue_time ?? ''] ?? '—'}
-                </span>
+                <div className="flex items-center gap-3">
+                  <span className="text-muted w-3 font-mono text-[12px]">{i + 1}</span>
+                  <span className="flex-1 font-mono text-[13px] font-semibold">{p.symbol}</span>
+                  <span className="tnum text-secondary font-mono text-[12px]">
+                    {formatCompactARS(p.value)}
+                  </span>
+                  <span
+                    className={`w-20 text-right font-mono text-[11px] ${
+                      p.rescue_time === 'T+0' ? 'text-gain' : 'text-warning'
+                    }`}
+                  >
+                    {p.rescue_time} · {RESCUE_LABEL[p.rescue_time ?? ''] ?? '—'}
+                  </span>
+                </div>
+                <p className="text-muted mt-1 pl-6 text-[11px]">{p.reason}</p>
               </li>
             ))}
           </ul>
         </Card>
+
+        {/* Lo que NO conviene vender se muestra igual, pero separado y con el
+            motivo: esconderlo llevaría a venderlo por descarte */}
+        {derived.sellOrder.some((p) => !p.advisable) && (
+          <details className="border-subtle bg-surface mt-3 rounded-2xl border px-4 py-3">
+            <summary className="text-secondary cursor-pointer text-[12px]">
+              No conviene vender ({derived.sellOrder.filter((p) => !p.advisable).length})
+            </summary>
+            <ul className="mt-2 space-y-2">
+              {derived.sellOrder
+                .filter((p) => !p.advisable)
+                .map((p) => (
+                  <li key={p.id} className="flex items-baseline gap-2">
+                    <span className="text-muted font-mono text-[12px]">{p.symbol}</span>
+                    <span className="text-loss text-[11px]">{p.reason}</span>
+                  </li>
+                ))}
+            </ul>
+          </details>
+        )}
       </div>
 
       {/* Posiciones */}
