@@ -8,6 +8,7 @@ import { Alerts } from '@/pages/Alerts'
 import { Opportunities } from '@/pages/Opportunities'
 import { News } from '@/pages/News'
 import { Settings } from '@/pages/Settings'
+import { History } from '@/pages/History'
 import { Login } from '@/pages/Login'
 
 function Gate() {
@@ -32,6 +33,7 @@ function Gate() {
           <Route path="oportunidades" element={<Opportunities />} />
           <Route path="noticias" element={<News />} />
           <Route path="config" element={<Settings />} />
+          <Route path="historial" element={<History />} />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Route>
       </Routes>

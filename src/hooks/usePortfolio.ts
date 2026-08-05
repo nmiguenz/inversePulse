@@ -4,11 +4,14 @@ import { useAuth } from '@/lib/auth'
 import type { AccountBalance, DollarRate, IolStatus, Position, PricePoint } from '@/lib/types'
 import { withMetrics } from '@/lib/portfolio'
 
+type Snapshot = { snapshot_date: string; total_value: number }
+
 type PortfolioData = {
   positions: Position[]
   balance: AccountBalance | null
   rates: DollarRate[]
   history: PricePoint[]
+  snapshots: Snapshot[]
   iolStatus: IolStatus | null
 }
 
@@ -17,6 +20,7 @@ const EMPTY: PortfolioData = {
   balance: null,
   rates: [],
   history: [],
+  snapshots: [],
   iolStatus: null,
 }
 
@@ -40,12 +44,18 @@ export function usePortfolio() {
       return
     }
 
-    const [positions, balance, rates, history, iolStatus] = await Promise.all([
+    const [positions, balance, rates, history, snapshots, iolStatus] = await Promise.all([
       supabase.from('positions').select('*').eq('user_id', userId),
       supabase.from('account_balance').select('*').eq('user_id', userId).maybeSingle(),
       // Una fila por tipo: se ordena por fecha y se deduplica abajo
       supabase.from('dollar_rates').select('*').gte('recorded_at', since(2)).order('recorded_at', { ascending: false }),
       supabase.from('price_history').select('symbol, close_price, recorded_at').gte('recorded_at', since(30)).order('recorded_at'),
+      supabase
+        .from('portfolio_snapshots')
+        .select('snapshot_date, total_value')
+        .eq('user_id', userId)
+        .gte('snapshot_date', since(90))
+        .order('snapshot_date'),
       supabase.from('iol_status').select('*').maybeSingle(),
     ])
 
@@ -57,6 +67,7 @@ export function usePortfolio() {
       balance: (balance.data ?? null) as AccountBalance | null,
       rates: (rates.data ?? []) as DollarRate[],
       history: (history.data ?? []) as PricePoint[],
+      snapshots: (snapshots.data ?? []) as Snapshot[],
       iolStatus: (iolStatus.data ?? null) as IolStatus | null,
     })
     setLoading(false)
@@ -107,6 +118,7 @@ export function usePortfolio() {
     balance: data.balance,
     latestRates,
     historyBySymbol,
+    snapshots: data.snapshots,
     iolStatus: data.iolStatus,
     loading,
     error,

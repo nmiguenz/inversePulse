@@ -1,21 +1,19 @@
 import { useEffect, useState } from 'react'
+import { useNavigate } from 'react-router-dom'
 import { Card, SectionTitle } from '@/components/ui/Card'
 import { IconChevronRight } from '@/components/ui/Icon'
 import { useAuth } from '@/lib/auth'
 import { currentSubscription, pushSupported, subscribeToPush, unsubscribeFromPush } from '@/lib/push'
 import { EarningsManager } from '@/components/settings/EarningsManager'
-
-const rows = [
-  { label: 'Umbrales de alerta', hint: 'Take profit, stop loss, rebalanceo' },
-  { label: 'Horario de monitoreo', hint: '10:00 – 18:00' },
-  { label: 'Gestión de posiciones', hint: 'Editar precio de compra' },
-  { label: 'Cuenta IOL', hint: 'Conectada' },
-]
+import { ThresholdSettings } from '@/components/settings/ThresholdSettings'
+import { usePortfolio } from '@/hooks/usePortfolio'
 
 type PushState = 'checking' | 'off' | 'on' | 'busy' | 'unsupported' | 'blocked'
 
 export function Settings() {
+  const navigate = useNavigate()
   const { session, signOut } = useAuth()
+  const { iolStatus } = usePortfolio()
   const [push, setPush] = useState<PushState>('checking')
   const [pushError, setPushError] = useState('')
 
@@ -94,28 +92,44 @@ export function Settings() {
       </div>
 
       <div>
-        <SectionTitle icon="⚙️">Preferencias</SectionTitle>
-        <Card className="p-0">
-          <ul>
-            {rows.map((r) => (
-              <li key={r.label}>
-                <button
-                  type="button"
-                  className="border-subtle active:bg-hover flex w-full items-center justify-between gap-3 border-b px-4 py-3.5 text-left transition-colors last:border-b-0"
-                >
-                  <span>
-                    <span className="block text-[14px]">{r.label}</span>
-                    <span className="text-muted mt-0.5 block text-[12px]">{r.hint}</span>
-                  </span>
-                  <IconChevronRight className="text-muted shrink-0" />
-                </button>
-              </li>
-            ))}
-          </ul>
+        <SectionTitle icon="🎚️">Umbrales de alerta</SectionTitle>
+        <Card>
+          <ThresholdSettings />
         </Card>
-        <p className="text-muted mt-3 text-center font-mono text-[10px] tracking-wide uppercase">
-          Editables en la Fase 6
-        </p>
+      </div>
+
+      <div>
+        <SectionTitle icon="⚙️">Más</SectionTitle>
+        <Card className="p-0">
+          <button
+            type="button"
+            onClick={() => navigate('/historial')}
+            className="border-subtle active:bg-hover flex w-full items-center justify-between gap-3 border-b px-4 py-3.5 text-left transition-colors"
+          >
+            <span>
+              <span className="block text-[14px]">Historial de operaciones</span>
+              <span className="text-muted mt-0.5 block text-[12px]">Ver y exportar a CSV</span>
+            </span>
+            <IconChevronRight className="text-muted shrink-0" />
+          </button>
+          <div className="flex items-center justify-between gap-3 px-4 py-3.5">
+            <span>
+              <span className="block text-[14px]">Cuenta IOL</span>
+              <span className="text-muted mt-0.5 block text-[12px]">
+                {iolStatus?.is_connected ? 'Conectada' : 'Sin conectar'}
+                {iolStatus?.last_sync_at &&
+                  ` · último sync ${new Date(iolStatus.last_sync_at).toLocaleTimeString('es-AR', {
+                    hour: '2-digit',
+                    minute: '2-digit',
+                  })}`}
+              </span>
+            </span>
+            <span
+              className={`h-2 w-2 shrink-0 rounded-full ${iolStatus?.is_connected ? 'bg-gain' : 'bg-muted'}`}
+              aria-hidden
+            />
+          </div>
+        </Card>
       </div>
 
       <div>

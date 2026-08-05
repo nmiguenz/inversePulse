@@ -143,7 +143,21 @@ activo por defecto si no se configura) y un tope de 40 noticias analizadas por c
 Para medir el ratio con datos frescos, la respuesta de la function trae `stats.fetched` vs
 `stats.analyzed`: si se parecen, el pre-filtro dejó de filtrar.
 
-## Próximo — Fase 5
+## Estado — Fases 5 y 6 ✅
+
+- `analyze-opportunities` con Opus 5; el símbolo sugerido es un `enum` del universo
+  de `asset_metadata`, así que la API impide que proponga un ticker que no cotiza
+- `earnings-reminder` diario, con las fechas cargadas a mano desde Config
+- Gráfico de evolución de la cartera sobre `portfolio_snapshots`
+- Umbrales de alerta editables con sliders (se guardan en `users.settings`, que es
+  de donde los lee `evaluate-alerts`: no hay que redeployar nada)
+- Historial de operaciones con exportación a CSV
+- Pull-to-refresh en el Dashboard
+- "Liquidez rápida" pasó a ser un **ranking de conveniencia de venta**: combina qué
+  es el activo, qué tan rápido entrega la plata y qué cuesta venderlo. Lo que está
+  en pérdida no se sugiere — queda aparte, con el motivo
+
+## Referencia vieja — Fase 5
 
 - `analyze-opportunities` con Claude Opus 5 (razonamiento sobre decisiones de inversión)
 - Cards de oportunidades con growth estimate y horizonte temporal

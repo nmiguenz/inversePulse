@@ -4,6 +4,7 @@ import { Card, EmptyState, SectionTitle } from '@/components/ui/Card'
 import { MetricCard } from '@/components/ui/MetricCard'
 import { TagPill } from '@/components/ui/Badge'
 import { SectorDonut } from '@/components/dashboard/SectorDonut'
+import { PortfolioChart } from '@/components/dashboard/PortfolioChart'
 import { PositionRow } from '@/components/dashboard/PositionRow'
 import { DollarStrip } from '@/components/dashboard/DollarStrip'
 import { usePortfolio } from '@/hooks/usePortfolio'
@@ -25,7 +26,7 @@ const topics = [
 
 export function Dashboard() {
   const navigate = useNavigate()
-  const { positions, balance, latestRates, historyBySymbol, iolStatus, loading, error, reload } =
+  const { positions, balance, latestRates, historyBySymbol, snapshots, iolStatus, loading, error, reload } =
     usePortfolio()
 
   const { pull, refreshing, ready } = usePullToRefresh(reload)
@@ -123,6 +124,14 @@ export function Dashboard() {
         value={formatARS(balance?.available_ars ?? 0, true)}
         subLabel={balance?.committed_ars ? `${formatARS(balance.committed_ars)} comprometido` : 'sin rendir'}
       />
+
+      {/* Evolución de la cartera */}
+      <div>
+        <SectionTitle icon="📉">Evolución</SectionTitle>
+        <Card>
+          <PortfolioChart snapshots={snapshots} />
+        </Card>
+      </div>
 
       {/* Composición por sector */}
       <div>
