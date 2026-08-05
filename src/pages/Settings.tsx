@@ -7,6 +7,13 @@ import { currentSubscription, pushSupported, subscribeToPush, unsubscribeFromPus
 import { EarningsManager } from '@/components/settings/EarningsManager'
 import { ThresholdSettings } from '@/components/settings/ThresholdSettings'
 import { usePortfolio } from '@/hooks/usePortfolio'
+import { loadTheme, saveTheme, type ThemeChoice } from '@/lib/theme'
+
+const THEME_OPTIONS: Array<{ value: ThemeChoice; label: string }> = [
+  { value: 'system', label: 'Automático' },
+  { value: 'light', label: 'Claro' },
+  { value: 'dark', label: 'Oscuro' },
+]
 
 type PushState = 'checking' | 'off' | 'on' | 'busy' | 'unsupported' | 'blocked'
 
@@ -16,6 +23,7 @@ export function Settings() {
   const { iolStatus } = usePortfolio()
   const [push, setPush] = useState<PushState>('checking')
   const [pushError, setPushError] = useState('')
+  const [theme, setTheme] = useState<ThemeChoice>(() => loadTheme())
 
   useEffect(() => {
     if (!pushSupported) return setPush('unsupported')
@@ -81,6 +89,34 @@ export function Settings() {
               Las desbloqueás desde el candado en la barra de direcciones del navegador.
             </p>
           )}
+        </Card>
+      </div>
+
+      <div>
+        <SectionTitle icon="🎨">Apariencia</SectionTitle>
+        <Card>
+          <div className="flex gap-2">
+            {THEME_OPTIONS.map((option) => (
+              <button
+                key={option.value}
+                type="button"
+                onClick={() => {
+                  setTheme(option.value)
+                  saveTheme(option.value)
+                }}
+                className={`flex-1 rounded-xl border py-2.5 text-[13px] transition-colors ${
+                  theme === option.value
+                    ? 'border-accent bg-accent-soft text-accent font-medium'
+                    : 'border-line bg-elevated text-secondary active:bg-hover'
+                }`}
+              >
+                {option.label}
+              </button>
+            ))}
+          </div>
+          <p className="text-muted mt-2.5 text-[12px] leading-relaxed">
+            "Automático" sigue la configuración de tu teléfono.
+          </p>
         </Card>
       </div>
 

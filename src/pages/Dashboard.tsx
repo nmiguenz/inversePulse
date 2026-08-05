@@ -1,4 +1,4 @@
-import { useMemo } from 'react'
+import { useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { Card, EmptyState, SectionTitle } from '@/components/ui/Card'
 import { MetricCard } from '@/components/ui/MetricCard'
@@ -10,9 +10,13 @@ import { DollarStrip } from '@/components/dashboard/DollarStrip'
 import { usePortfolio } from '@/hooks/usePortfolio'
 import { usePullToRefresh } from '@/hooks/usePullToRefresh'
 import { PullIndicator } from '@/components/ui/PullIndicator'
+import { AssetLogo } from '@/components/ui/AssetLogo'
 import { dayChange, sectorBreakdown, sellRanking, totalValue, worstPosition } from '@/lib/portfolio'
 import { formatARS, formatCompactARS, formatPct, formatSignedARS, toneOf, toneText } from '@/lib/format'
 import { RESCUE_LABEL } from '@/lib/sectors'
+
+/** Cuántas mostrar antes del "ver más" en el ranking de venta */
+const TOP_SELL = 5
 
 /** Los slugs coinciden con world_topics.slug — el tap abre el feed ya filtrado */
 const topics = [
@@ -30,6 +34,7 @@ export function Dashboard() {
     usePortfolio()
 
   const { pull, refreshing, ready } = usePullToRefresh(reload)
+  const [showAllSell, setShowAllSell] = useState(false)
 
   const derived = useMemo(
     () => ({
@@ -41,6 +46,9 @@ export function Dashboard() {
     }),
     [positions],
   )
+
+  const advisable = derived.sellOrder.filter((p) => p.advisable)
+  const notAdvisable = derived.sellOrder.filter((p) => !p.advisable)
 
   if (loading) return <DashboardSkeleton />
 
@@ -81,27 +89,15 @@ export function Dashboard() {
         </p>
       )}
 
-      {/* Total de cartera */}
-      <Card>
-        <div className="flex items-start justify-between gap-4">
-          <div>
-            <p className="text-muted font-mono text-[11px] tracking-[0.1em] uppercase">
-              Total cartera
-            </p>
-            <p className="font-display tnum text-primary mt-1.5 text-[32px] leading-none font-bold">
-              {formatARS(derived.total)}
-            </p>
-          </div>
-          <div className="text-right">
-            <p className="text-muted font-mono text-[11px] tracking-[0.1em] uppercase">Hoy</p>
-            <p className={`font-display tnum mt-1.5 text-[19px] leading-none font-bold ${toneText[dayTone]}`}>
-              {formatSignedARS(derived.day.amount)}
-            </p>
-            <p className={`tnum mt-1 font-mono text-[12px] ${toneText[dayTone]}`}>
-              {formatPct(derived.day.pct)}
-            </p>
-          </div>
-        </div>
+      {/* Total de cartera — el número grande manda, todo lo demás lo acompaña */}
+      <Card className="py-7 text-center">
+        <p className="text-secondary text-[13px]">Total en tu cartera</p>
+        <p className="font-display tnum text-primary mt-2 text-[38px] leading-none font-bold">
+          {formatARS(derived.total)}
+        </p>
+        <p className={`tnum mt-2.5 text-[14px] font-medium ${toneText[dayTone]}`}>
+          {formatSignedARS(derived.day.amount)} · {formatPct(derived.day.pct)} hoy
+        </p>
       </Card>
 
       {/* Métricas rápidas */}
@@ -146,47 +142,56 @@ export function Dashboard() {
         <SectionTitle icon="💰">Si necesitás efectivo</SectionTitle>
         <Card className="p-0">
           <ul>
-            {derived.sellOrder.filter((p) => p.advisable).map((p, i) => (
-              <li
-                key={p.id}
-                className="border-subtle border-b px-4 py-3 last:border-b-0"
-              >
+            {advisable.slice(0, showAllSell ? undefined : TOP_SELL).map((p, i) => (
+              <li key={p.id} className="border-subtle border-b px-5 py-3.5 last:border-b-0">
                 <div className="flex items-center gap-3">
-                  <span className="text-muted w-3 font-mono text-[12px]">{i + 1}</span>
-                  <span className="flex-1 font-mono text-[13px] font-semibold">{p.symbol}</span>
-                  <span className="tnum text-secondary font-mono text-[12px]">
+                  <span className="text-muted w-3 text-[12px]">{i + 1}</span>
+                  <AssetLogo symbol={p.symbol} sector={p.sector} size="sm" />
+                  <span className="text-primary flex-1 text-[14px] font-semibold">{p.symbol}</span>
+                  <span className="tnum text-primary text-[13px] font-semibold">
                     {formatCompactARS(p.value)}
                   </span>
                   <span
-                    className={`w-20 text-right font-mono text-[11px] ${
+                    className={`w-16 text-right text-[11px] ${
                       p.rescue_time === 'T+0' ? 'text-gain' : 'text-warning'
                     }`}
                   >
-                    {p.rescue_time} · {RESCUE_LABEL[p.rescue_time ?? ''] ?? '—'}
+                    {RESCUE_LABEL[p.rescue_time ?? ''] ?? '—'}
                   </span>
                 </div>
-                <p className="text-muted mt-1 pl-6 text-[11px]">{p.reason}</p>
+                <p className="text-muted mt-1.5 pl-[52px] text-[12px]">{p.reason}</p>
               </li>
             ))}
           </ul>
+
+          {advisable.length > TOP_SELL && (
+            <button
+              type="button"
+              onClick={() => setShowAllSell((v) => !v)}
+              className="text-accent border-subtle w-full border-t py-3 text-[13px] font-medium"
+            >
+              {showAllSell
+                ? 'Ver menos'
+                : `Ver las ${advisable.length - TOP_SELL} restantes`}
+            </button>
+          )}
         </Card>
 
         {/* Lo que NO conviene vender se muestra igual, pero separado y con el
             motivo: esconderlo llevaría a venderlo por descarte */}
-        {derived.sellOrder.some((p) => !p.advisable) && (
-          <details className="border-subtle bg-surface mt-3 rounded-2xl border px-4 py-3">
-            <summary className="text-secondary cursor-pointer text-[12px]">
-              No conviene vender ({derived.sellOrder.filter((p) => !p.advisable).length})
+        {notAdvisable.length > 0 && (
+          <details className="card mt-3 px-5 py-3.5">
+            <summary className="text-secondary cursor-pointer text-[13px]">
+              No conviene vender ({notAdvisable.length})
             </summary>
-            <ul className="mt-2 space-y-2">
-              {derived.sellOrder
-                .filter((p) => !p.advisable)
-                .map((p) => (
-                  <li key={p.id} className="flex items-baseline gap-2">
-                    <span className="text-muted font-mono text-[12px]">{p.symbol}</span>
-                    <span className="text-loss text-[11px]">{p.reason}</span>
-                  </li>
-                ))}
+            <ul className="mt-3 space-y-2.5">
+              {notAdvisable.map((p) => (
+                <li key={p.id} className="flex items-center gap-2.5">
+                  <AssetLogo symbol={p.symbol} sector={p.sector} size="sm" />
+                  <span className="text-primary text-[13px] font-semibold">{p.symbol}</span>
+                  <span className="text-loss text-[12px]">{p.reason}</span>
+                </li>
+              ))}
             </ul>
           </details>
         )}

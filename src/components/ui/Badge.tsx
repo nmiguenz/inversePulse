@@ -3,10 +3,10 @@ import type { ReactNode } from 'react'
 export type Severity = 'critical' | 'warning' | 'info' | 'opportunity'
 
 const styles: Record<Severity, string> = {
-  critical: 'bg-[rgba(255,71,87,0.12)] border-[rgba(255,71,87,0.3)] text-loss',
-  warning: 'bg-[rgba(255,176,32,0.12)] border-[rgba(255,176,32,0.3)] text-warning',
-  info: 'bg-[rgba(77,166,255,0.12)] border-[rgba(77,166,255,0.3)] text-info',
-  opportunity: 'bg-[rgba(139,92,246,0.12)] border-[rgba(139,92,246,0.3)] text-accent',
+  critical: 'bg-loss-soft border-loss-line text-loss',
+  warning: 'bg-warning-soft border-warning-line text-warning',
+  info: 'bg-info-soft border-info-line text-info',
+  opportunity: 'bg-accent-soft border-accent-line text-accent',
 }
 
 export function AlertBadge({ severity, children }: { severity: Severity; children: ReactNode }) {

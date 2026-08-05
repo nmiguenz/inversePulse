@@ -23,7 +23,7 @@ export function SectorDonut({ slices }: { slices: SectorSlice[] }) {
               outerRadius={80}
               // 2px de superficie entre segmentos
               paddingAngle={2}
-              stroke="#0E0E14"
+              stroke="var(--color-surface)"
               strokeWidth={2}
               isAnimationActive={false}
             >
@@ -34,13 +34,13 @@ export function SectorDonut({ slices }: { slices: SectorSlice[] }) {
             <Tooltip
               cursor={false}
               contentStyle={{
-                background: '#161620',
-                border: '1px solid rgba(255,255,255,0.12)',
+                background: 'var(--color-elevated)',
+                border: '1px solid var(--color-strong)',
                 borderRadius: 12,
                 fontSize: 12,
                 padding: '8px 10px',
               }}
-              itemStyle={{ color: '#EEEEF4' }}
+              itemStyle={{ color: 'var(--color-primary)' }}
               labelStyle={{ display: 'none' }}
               formatter={(value: number, name: string) => [
                 `${formatARS(value)} · ${((value / slices.reduce((s, x) => s + x.value, 0)) * 100).toFixed(1)}%`,

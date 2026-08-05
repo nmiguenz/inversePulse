@@ -56,7 +56,7 @@ export function AlertCard({
   return (
     <li className="relative overflow-hidden rounded-2xl">
       {/* Fondo que se revela al deslizar */}
-      <div className="absolute inset-0 flex items-center justify-end rounded-2xl bg-[rgba(255,71,87,0.12)] pr-5">
+      <div className="absolute inset-0 flex items-center justify-end rounded-2xl bg-loss-soft pr-5">
         <span className="text-loss font-mono text-[11px] tracking-wider uppercase">Descartar</span>
       </div>
 

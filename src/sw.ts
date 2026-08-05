@@ -29,6 +29,17 @@ registerRoute(
   new StaleWhileRevalidate({ cacheName: 'google-fonts' }),
 )
 
+// Logos de empresas: cambian casi nunca y son chicos. Cachearlos evita que la
+// app instalada dependa de la red para dibujar la lista de posiciones.
+registerRoute(
+  ({ url }) =>
+    url.hostname === 'assets.parqet.com' || url.hostname === 'financialmodelingprep.com',
+  new StaleWhileRevalidate({
+    cacheName: 'asset-logos',
+    plugins: [new ExpirationPlugin({ maxEntries: 120, maxAgeSeconds: 60 * 60 * 24 * 30 })],
+  }),
+)
+
 // Datos de Supabase: network first con fallback al último dato conocido (offline)
 registerRoute(
   ({ url }) => url.hostname.endsWith('.supabase.co') && url.pathname.startsWith('/rest/'),

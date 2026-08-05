@@ -36,7 +36,7 @@ export function PortfolioChart({ snapshots }: { snapshots: Snapshot[] }) {
   const change = last - first
   const changePct = first > 0 ? (change / first) * 100 : 0
   const tone = toneOf(change)
-  const color = tone === 'gain' ? '#00E68A' : tone === 'loss' ? '#FF4757' : '#8888A0'
+  const color = tone === 'gain' ? 'var(--color-gain)' : tone === 'loss' ? 'var(--color-loss)' : 'var(--color-secondary)'
 
   return (
     <div>
@@ -62,7 +62,7 @@ export function PortfolioChart({ snapshots }: { snapshots: Snapshot[] }) {
 
             <XAxis
               dataKey="date"
-              tick={{ fill: '#555568', fontSize: 10, fontFamily: 'JetBrains Mono' }}
+              tick={{ fill: 'var(--color-muted)', fontSize: 10, fontFamily: 'JetBrains Mono' }}
               tickFormatter={(d: string) =>
                 new Date(`${d}T12:00:00`).toLocaleDateString('es-AR', { day: '2-digit', month: '2-digit' })
               }
@@ -73,15 +73,15 @@ export function PortfolioChart({ snapshots }: { snapshots: Snapshot[] }) {
             <YAxis hide domain={['dataMin', 'dataMax']} />
 
             <Tooltip
-              cursor={{ stroke: 'rgba(255,255,255,0.12)' }}
+              cursor={{ stroke: 'var(--color-strong)' }}
               contentStyle={{
-                background: '#161620',
-                border: '1px solid rgba(255,255,255,0.12)',
+                background: 'var(--color-elevated)',
+                border: '1px solid var(--color-strong)',
                 borderRadius: 12,
                 fontSize: 12,
                 padding: '8px 10px',
               }}
-              itemStyle={{ color: '#EEEEF4' }}
+              itemStyle={{ color: 'var(--color-primary)' }}
               labelFormatter={(d: string) =>
                 new Date(`${d}T12:00:00`).toLocaleDateString('es-AR', {
                   day: '2-digit',
@@ -98,7 +98,7 @@ export function PortfolioChart({ snapshots }: { snapshots: Snapshot[] }) {
               strokeWidth={2}
               fill="url(#portfolioFill)"
               dot={false}
-              activeDot={{ r: 4, strokeWidth: 2, stroke: '#0E0E14' }}
+              activeDot={{ r: 4, strokeWidth: 2, stroke: 'var(--color-surface)' }}
               isAnimationActive={false}
             />
           </AreaChart>

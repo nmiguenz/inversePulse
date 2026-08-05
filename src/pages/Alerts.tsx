@@ -52,7 +52,7 @@ export function Alerts() {
               onClick={() => setActive(f)}
               className={`shrink-0 rounded-full border px-3 py-1.5 text-[12px] transition-colors ${
                 active === f
-                  ? 'border-accent bg-[rgba(139,92,246,0.12)] text-accent'
+                  ? 'border-accent bg-accent-soft text-accent'
                   : 'border-line bg-elevated text-secondary active:bg-hover'
               }`}
             >

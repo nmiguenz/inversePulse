@@ -18,7 +18,7 @@ const HORIZON_LABEL: Record<TimeHorizon, string> = {
 }
 
 const CONFIDENCE_STYLE: Record<Confidence, { label: string; className: string }> = {
-  high: { label: 'Convicción alta', className: 'border-accent bg-[rgba(139,92,246,0.12)] text-accent' },
+  high: { label: 'Convicción alta', className: 'border-accent bg-accent-soft text-accent' },
   medium: { label: 'Convicción media', className: 'border-line bg-elevated text-secondary' },
   low: { label: 'Convicción baja', className: 'border-line bg-elevated text-muted' },
 }

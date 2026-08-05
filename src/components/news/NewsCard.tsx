@@ -2,8 +2,8 @@ import type { NewsItem, Sentiment } from '@/lib/types'
 import { formatRelativeTime } from '@/lib/format'
 
 const SENTIMENT_STYLE: Record<Sentiment, { label: string; className: string }> = {
-  positive: { label: 'Positiva', className: 'bg-[rgba(0,230,138,0.12)] border-[rgba(0,230,138,0.3)] text-gain' },
-  negative: { label: 'Negativa', className: 'bg-[rgba(255,71,87,0.12)] border-[rgba(255,71,87,0.3)] text-loss' },
+  positive: { label: 'Positiva', className: 'bg-gain-soft border-gain-line text-gain' },
+  negative: { label: 'Negativa', className: 'bg-loss-soft border-loss-line text-loss' },
   neutral: { label: 'Neutral', className: 'border-line bg-elevated text-secondary' },
 }
 
@@ -65,7 +65,7 @@ export function NewsCard({ item, holdings }: { item: NewsItem; holdings: Set<str
               key={symbol}
               className={`rounded-full border px-2.5 py-0.5 font-mono text-[10px] ${
                 owned
-                  ? 'border-accent bg-[rgba(139,92,246,0.12)] text-accent'
+                  ? 'border-accent bg-accent-soft text-accent'
                   : 'border-line bg-elevated text-muted'
               }`}
               title={owned ? 'En tu cartera' : undefined}

@@ -12,7 +12,13 @@ export function Sparkline({ data, tone }: { data: number[]; tone: 'gain' | 'loss
     return <div className="h-7 w-16" aria-hidden />
   }
 
-  const color = tone === 'gain' ? '#00E68A' : tone === 'loss' ? '#FF4757' : '#8888A0'
+  // SVG resuelve var() en runtime, así que el color sigue al tema sin JS
+  const color =
+    tone === 'gain'
+      ? 'var(--color-gain)'
+      : tone === 'loss'
+        ? 'var(--color-loss)'
+        : 'var(--color-muted)'
   const points = data.map((close, i) => ({ i, close }))
 
   return (

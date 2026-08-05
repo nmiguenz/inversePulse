@@ -2,37 +2,62 @@
 
 /* ============================================
    Design System — IOL Portfolio Monitor
-   Dashboard financiero oscuro, mobile first (375px)
+   Mobile first (375px), tema claro y oscuro.
+
+   Cada token se declara UNA vez con light-dark(claro, oscuro). El browser
+   resuelve según `color-scheme`, así que el tema se cambia con una sola
+   propiedad y no hay que duplicar la paleta ni tocar componentes.
+
+   Los dos valores de cada par no son el mismo color con otra luminosidad:
+   están elegidos para pasar 4.5:1 sobre SU fondo. El verde eléctrico que
+   funciona sobre negro (#00E68A) da 1.66:1 sobre blanco — ilegible.
    ============================================ */
 
 @theme {
-  /* Backgrounds */
-  --color-base: #06060a; /* Fondo principal — casi negro con tinte azul */
-  --color-surface: #0e0e14; /* Cards y contenedores */
-  --color-elevated: #161620; /* Elementos elevados, modals */
-  --color-hover: #1c1c28; /* Hover states */
+  /* Superficies */
+  --color-base: light-dark(#f4f5f7, #06060a); /* Fondo de página */
+  --color-surface: light-dark(#ffffff, #101018); /* Cards */
+  --color-elevated: light-dark(#f0f1f4, #191922); /* Chips, inputs */
+  --color-hover: light-dark(#e9ebef, #22222e);
 
-  /* Borders */
-  --color-subtle: rgba(255, 255, 255, 0.05);
-  --color-line: rgba(255, 255, 255, 0.08);
-  --color-strong: rgba(255, 255, 255, 0.12);
+  /* Bordes */
+  --color-subtle: light-dark(rgba(11, 11, 18, 0.06), rgba(255, 255, 255, 0.06));
+  --color-line: light-dark(rgba(11, 11, 18, 0.1), rgba(255, 255, 255, 0.1));
+  --color-strong: light-dark(rgba(11, 11, 18, 0.16), rgba(255, 255, 255, 0.16));
 
-  /* Text */
-  --color-primary: #eeeef4;
-  --color-secondary: #8888a0;
-  --color-muted: #555568;
+  /* Texto */
+  --color-primary: light-dark(#0b0b12, #eeeef4);
+  --color-secondary: light-dark(#5a5a6e, #9a9ab0);
+  --color-muted: light-dark(#6e6e82, #6f6f85);
 
-  /* Semantic */
-  --color-gain: #00e68a;
-  --color-loss: #ff4757;
-  --color-warning: #ffb020;
-  --color-info: #4da6ff;
-  --color-accent: #8b5cf6;
+  /* Semánticos — verificados a 4.5:1 sobre la card y sobre el fondo de página */
+  --color-gain: light-dark(#007a52, #00e68a);
+  --color-loss: light-dark(#d1273b, #ff5a68);
+  --color-warning: light-dark(#9a5c00, #ffb020);
+  --color-info: light-dark(#0b6fd1, #4da6ff);
+  --color-accent: light-dark(#6d3ae8, #a78bfa);
+
+  /* Fondos teñidos: reemplazan los rgba(...) hardcodeados en los componentes,
+     que no cambiaban con el tema */
+  --color-gain-soft: light-dark(rgba(0, 122, 82, 0.1), rgba(0, 230, 138, 0.12));
+  --color-loss-soft: light-dark(rgba(209, 39, 59, 0.1), rgba(255, 90, 104, 0.12));
+  --color-warning-soft: light-dark(rgba(154, 92, 0, 0.1), rgba(255, 176, 32, 0.12));
+  --color-info-soft: light-dark(rgba(11, 111, 209, 0.1), rgba(77, 166, 255, 0.12));
+  --color-accent-soft: light-dark(rgba(109, 58, 232, 0.1), rgba(167, 139, 250, 0.14));
+
+  --color-gain-line: light-dark(rgba(0, 122, 82, 0.28), rgba(0, 230, 138, 0.3));
+  --color-loss-line: light-dark(rgba(209, 39, 59, 0.28), rgba(255, 90, 104, 0.3));
+  --color-warning-line: light-dark(rgba(154, 92, 0, 0.28), rgba(255, 176, 32, 0.3));
+  --color-info-line: light-dark(rgba(11, 111, 209, 0.28), rgba(77, 166, 255, 0.3));
+  --color-accent-line: light-dark(rgba(109, 58, 232, 0.32), rgba(167, 139, 250, 0.35));
 
   /* Tipografía */
   --font-display: 'Space Grotesk', ui-sans-serif, system-ui, sans-serif;
   --font-body: 'Inter', ui-sans-serif, system-ui, sans-serif;
   --font-mono: 'JetBrains Mono', ui-monospace, monospace;
+
+  /* Radios generosos: menos terminal, más app de consumo */
+  --radius-card: 20px;
 
   /* Animaciones */
   --animate-fade-up: fade-up 0.24s ease-out both;
@@ -49,19 +74,42 @@
   }
 }
 
+/* ============================================
+   Selección de tema.
+   `light dark` sigue al sistema; el data-theme del toggle lo fuerza.
+   ============================================ */
 :root {
-  /* Gradients y glows — no son utilidades de Tailwind, se usan como var() */
-  --gradient-gain: linear-gradient(135deg, #00e68a 0%, #00b368 100%);
-  --gradient-loss: linear-gradient(135deg, #ff4757 0%, #cc3a47 100%);
-  --gradient-accent: linear-gradient(135deg, #8b5cf6 0%, #6d3ae8 100%);
-  --glow-gain: 0 0 20px rgba(0, 230, 138, 0.15);
-  --glow-loss: 0 0 20px rgba(255, 71, 87, 0.15);
+  color-scheme: light dark;
+
+  --gradient-accent: linear-gradient(135deg, light-dark(#7c4dff, #8b5cf6) 0%, #6d3ae8 100%);
+  --glow-gain: light-dark(0 0 0 1px var(--color-gain-line), 0 0 24px rgba(0, 230, 138, 0.16));
+  --glow-loss: light-dark(0 0 0 1px var(--color-loss-line), 0 0 24px rgba(255, 90, 104, 0.16));
+
+  /* La sombra da profundidad en claro; en oscuro no se ve y suma ruido.
+     No puede ir en light-dark(): son dos sombras separadas por coma, y la coma
+     ahí adentro separaría los argumentos de la función. */
+  --shadow-card:
+    0 1px 2px rgba(11, 11, 18, 0.04),
+    0 8px 24px rgba(11, 11, 18, 0.05);
 
   /* Alturas de chrome fijo (para paddings seguros) */
   --topbar-h: 56px;
-  --bottomnav-h: 60px;
+  --bottomnav-h: 64px;
+}
 
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme='light']) {
+    --shadow-card: none;
+  }
+}
+
+:root[data-theme='light'] {
+  color-scheme: light;
+}
+
+:root[data-theme='dark'] {
   color-scheme: dark;
+  --shadow-card: none;
 }
 
 @layer base {
@@ -72,9 +120,9 @@
 
   body {
     @apply bg-base text-primary font-body antialiased;
-    /* Evita rebote horizontal en mobile */
     overflow-x: hidden;
     overscroll-behavior-y: none;
+    transition: background-color 0.2s ease;
   }
 
   /* Números financieros: tabulares siempre */
@@ -96,6 +144,14 @@
   }
 }
 
+/* Card: un solo lugar define superficie, borde, radio y sombra */
+@utility card {
+  background-color: var(--color-surface);
+  border: 1px solid var(--color-subtle);
+  border-radius: var(--radius-card);
+  box-shadow: var(--shadow-card);
+}
+
 @utility glow-gain {
   box-shadow: var(--glow-gain);
 }
@@ -106,14 +162,6 @@
 
 @utility gradient-accent {
   background-image: var(--gradient-accent);
-}
-
-@utility gradient-gain {
-  background-image: var(--gradient-gain);
-}
-
-@utility gradient-loss {
-  background-image: var(--gradient-loss);
 }
 
 /* Scroll horizontal sin scrollbar (chips de temáticas) */

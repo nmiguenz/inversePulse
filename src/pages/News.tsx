@@ -33,7 +33,7 @@ export function News() {
           onClick={() => selectTag(null)}
           className={`shrink-0 rounded-full border px-3 py-1.5 text-[12px] transition-colors ${
             !tag
-              ? 'border-accent bg-[rgba(139,92,246,0.12)] text-accent'
+              ? 'border-accent bg-accent-soft text-accent'
               : 'border-line bg-elevated text-secondary active:bg-hover'
           }`}
         >
@@ -46,7 +46,7 @@ export function News() {
             onClick={() => selectTag(topic.slug)}
             className={`flex shrink-0 items-center gap-1.5 rounded-full border px-3 py-1.5 text-[12px] whitespace-nowrap transition-colors ${
               tag === topic.slug
-                ? 'border-accent bg-[rgba(139,92,246,0.12)] text-accent'
+                ? 'border-accent bg-accent-soft text-accent'
                 : 'border-line bg-elevated text-secondary active:bg-hover'
             }`}
           >
