@@ -42,6 +42,28 @@ export type PricePoint = {
   recorded_at: string
 }
 
+export type RecommendationAction = 'buy' | 'add' | 'trim' | 'sell' | 'rebalance' | 'hold'
+
+export type Recommendation = {
+  id: string
+  action: RecommendationAction
+  symbol: string
+  counterpart_symbol: string | null
+  title: string
+  reasoning: string
+  confidence: 'high' | 'medium' | 'low'
+  time_horizon: 'short' | 'medium' | 'long' | null
+  suggested_amount: number | null
+  suggested_quantity: number | null
+  realizes_loss: boolean
+  price_at_recommendation: number | null
+  outcome_pct: number | null
+  outcome_verdict: string | null
+  evaluated_at: string | null
+  is_active: boolean
+  created_at: string
+}
+
 export type Confidence = 'high' | 'medium' | 'low'
 export type TimeHorizon = 'short' | 'medium' | 'long'
 

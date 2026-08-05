@@ -143,6 +143,167 @@ export async function analyzeNews(
 // Oportunidades de inversión
 // ============================================================
 
+// ============================================================
+// Asesor: acciones concretas sobre la cartera
+// ============================================================
+
+export type Recommendation = {
+  action: 'buy' | 'add' | 'trim' | 'sell' | 'rebalance' | 'hold'
+  symbol: string
+  counterpart_symbol: string | null
+  title: string
+  reasoning: string
+  confidence: 'high' | 'medium' | 'low'
+  time_horizon: 'short' | 'medium' | 'long'
+  suggested_amount_ars: number | null
+  realizes_loss: boolean
+}
+
+export type AdvisorContext = {
+  positions: Array<{
+    symbol: string
+    sector: string
+    value: number
+    gainPct: number
+    dayPct: number
+    weight: number
+    trend30d: string
+  }>
+  totalValue: number
+  availableCash: number
+  news: Array<{ title: string; summary: string; sentiment: string; symbols: string[] }>
+  universe: Array<{ symbol: string; name: string; sector: string; price: number | null }>
+  settings: { rebalance_pct: number; sector_concentration_pct: number; take_profit_pct: number }
+  sectorWeights: Array<{ sector: string; pct: number }>
+}
+
+function advisorSchema(symbols: string[]) {
+  return {
+    type: 'object',
+    properties: {
+      recommendations: {
+        type: 'array',
+        items: {
+          type: 'object',
+          properties: {
+            action: { type: 'string', enum: ['buy', 'add', 'trim', 'sell', 'rebalance', 'hold'] },
+            // enum cerrado: la API impide que sugiera un ticker que no se puede operar
+            symbol: { type: 'string', enum: symbols },
+            counterpart_symbol: {
+              anyOf: [{ type: 'string', enum: symbols }, { type: 'null' }],
+              description: 'Solo en rebalance: de qué activo sale la plata',
+            },
+            title: { type: 'string', description: 'Una línea, accionable' },
+            reasoning: {
+              type: 'string',
+              description: 'En español, 3-5 oraciones: por qué ahora y qué lo dispararía en contra',
+            },
+            confidence: { type: 'string', enum: ['high', 'medium', 'low'] },
+            time_horizon: { type: 'string', enum: ['short', 'medium', 'long'] },
+            suggested_amount_ars: {
+              anyOf: [{ type: 'number' }, { type: 'null' }],
+              description: 'Monto en pesos. Nunca mayor al efectivo disponible en una compra.',
+            },
+            realizes_loss: {
+              type: 'boolean',
+              description: 'true si la venta sugerida cristaliza una pérdida',
+            },
+          },
+          required: [
+            'action',
+            'symbol',
+            'counterpart_symbol',
+            'title',
+            'reasoning',
+            'confidence',
+            'time_horizon',
+            'suggested_amount_ars',
+            'realizes_loss',
+          ],
+          additionalProperties: false,
+        },
+      },
+    },
+    required: ['recommendations'],
+    additionalProperties: false,
+  }
+}
+
+export async function advise(ctx: AdvisorContext): Promise<{
+  recommendations: Recommendation[]
+  usage: { input: number; output: number }
+}> {
+  const system = [
+    'Sos asesor financiero con perfil moderado-agresivo, especializado en CEDEARs argentinos.',
+    'Tu trabajo es recomendar ACCIONES concretas sobre esta cartera, no describirla.',
+    '',
+    'Reglas:',
+    '- Máximo 3 recomendaciones. Si hoy no hay nada que amerite mover plata, devolvé',
+    '  una sola con action "hold" y explicá por qué conviene no hacer nada.',
+    '- No sugieras operar por operar. Cada movimiento tiene costo y riesgo de timing.',
+    '- En una compra, suggested_amount_ars NUNCA puede superar el efectivo disponible.',
+    '- Podés sugerir vender en pérdida si la TESIS se rompió (el negocio está peor,',
+    '  no solo el precio). En ese caso marcá realizes_loss y decilo explícitamente en',
+    '  el reasoning. Si solo cayó el precio pero la empresa sigue bien, no es motivo.',
+    '- En un rebalance indicá el counterpart_symbol: de dónde sale la plata.',
+    '- Mirá la concentración: sugerir más de un sector que ya pesa de más empeora el riesgo.',
+    '',
+    'En el reasoning incluí siempre qué te haría cambiar de opinión. Una tesis sin',
+    'condición de salida no es una tesis.',
+  ].join('\n')
+
+  const positionLines = ctx.positions
+    .map(
+      (p) =>
+        `${p.symbol} (${p.sector}): ${fmtArs(p.value)} · ${p.weight.toFixed(1)}% de la cartera · P/L ${p.gainPct.toFixed(1)}% · hoy ${p.dayPct.toFixed(1)}% · 30d ${p.trend30d}`,
+    )
+    .join('\n')
+
+  const user = [
+    `CARTERA — total ${fmtArs(ctx.totalValue)}, efectivo disponible ${fmtArs(ctx.availableCash)}`,
+    positionLines || '(sin posiciones)',
+    '',
+    `CONCENTRACIÓN POR SECTOR: ${ctx.sectorWeights.map((s) => `${s.sector} ${s.pct.toFixed(0)}%`).join(' · ')}`,
+    `UMBRALES DEL USUARIO: máx ${ctx.settings.rebalance_pct}% por activo, máx ${ctx.settings.sector_concentration_pct}% por sector, toma de ganancia ${ctx.settings.take_profit_pct}%`,
+    '',
+    'NOTICIAS RECIENTES:',
+    ctx.news
+      .map((n) => `- [${n.sentiment}] ${n.title}${n.symbols.length ? ` (${n.symbols.join(', ')})` : ''}\n  ${n.summary}`)
+      .join('\n') || '(sin noticias relevantes)',
+    '',
+    'ACTIVOS QUE PODÉS SUGERIR:',
+    ctx.universe
+      .map((u) => `${u.symbol} — ${u.name} (${u.sector})${u.price ? ` · ${fmtArs(u.price)}` : ''}`)
+      .join('\n'),
+  ].join('\n')
+
+  const response = await client.messages.create({
+    model: OPPORTUNITY_MODEL,
+    max_tokens: 8000,
+    output_config: {
+      effort: 'medium',
+      format: { type: 'json_schema', schema: advisorSchema(ctx.universe.map((u) => u.symbol)) },
+    },
+    system,
+    messages: [{ role: 'user', content: user }],
+  })
+
+  const usage = { input: response.usage.input_tokens, output: response.usage.output_tokens }
+
+  if (response.stop_reason === 'refusal' || response.stop_reason === 'max_tokens') {
+    console.warn(`[claude] asesor: stop_reason=${response.stop_reason}`)
+    return { recommendations: [], usage }
+  }
+
+  const text = response.content.find((b) => b.type === 'text')
+  if (!text || text.type !== 'text') return { recommendations: [], usage }
+
+  const parsed = JSON.parse(text.text) as { recommendations: Recommendation[] }
+  console.log(`[claude] asesor · in ${usage.input} / out ${usage.output} tokens`)
+
+  return { recommendations: (parsed.recommendations ?? []).slice(0, 3), usage }
+}
+
 export type Opportunity = {
   symbol: string
   opportunity_type: 'pullback' | 'momentum' | 'undervalued' | 'sector_rotation' | 'earnings_play'

@@ -1,16 +1,18 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
-import { EmptyState } from '@/components/ui/Card'
-import { OpportunityCard } from '@/components/opportunities/OpportunityCard'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { Card, EmptyState } from '@/components/ui/Card'
+import { RecommendationCard } from '@/components/opportunities/RecommendationCard'
 import { supabase, isSupabaseConfigured } from '@/lib/supabase'
 import { useAuth } from '@/lib/auth'
 import { uniqueChannelName } from '@/lib/realtime'
-import type { Opportunity } from '@/lib/types'
+import { formatPct } from '@/lib/format'
+import type { Recommendation } from '@/lib/types'
 
 export function Opportunities() {
   const { session } = useAuth()
-  const [opportunities, setOpportunities] = useState<Opportunity[]>([])
+  const [active, setActive] = useState<Recommendation[]>([])
+  const [past, setPast] = useState<Recommendation[]>([])
   const [loading, setLoading] = useState(true)
-  const channelName = useRef(uniqueChannelName('opportunities-feed'))
+  const channelName = useRef(uniqueChannelName('recommendations-feed'))
 
   const load = useCallback(async () => {
     if (!isSupabaseConfigured || !session) {
@@ -18,17 +20,25 @@ export function Opportunities() {
       return
     }
 
-    // Solo las vigentes: una tesis de hace dos semanas ya no es accionable
-    const { data, error } = await supabase
-      .from('opportunities')
-      .select('*')
-      .eq('is_active', true)
-      .order('confidence')
-      .order('created_at', { ascending: false })
-      .limit(20)
+    const [current, evaluated] = await Promise.all([
+      supabase
+        .from('recommendations')
+        .select('*')
+        .eq('is_active', true)
+        .order('confidence')
+        .order('created_at', { ascending: false })
+        .limit(20),
+      // Las ya evaluadas alimentan el historial de aciertos
+      supabase
+        .from('recommendations')
+        .select('*')
+        .not('evaluated_at', 'is', null)
+        .order('evaluated_at', { ascending: false })
+        .limit(50),
+    ])
 
-    if (error) console.error('[opportunities]', error.message)
-    setOpportunities((data ?? []) as Opportunity[])
+    setActive((current.data ?? []) as Recommendation[])
+    setPast((evaluated.data ?? []) as Recommendation[])
     setLoading(false)
   }, [session])
 
@@ -38,16 +48,25 @@ export function Opportunities() {
 
   useEffect(() => {
     if (!isSupabaseConfigured || !session) return
-
     const channel = supabase
       .channel(channelName.current)
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'opportunities' }, () => void load())
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'recommendations' }, () => void load())
       .subscribe()
-
     return () => {
       void supabase.removeChannel(channel)
     }
   }, [session, load])
+
+  /**
+   * Cómo le viene yendo al asesor. Es el punto del registro: una IA que sugiere
+   * mover plata sin dejar rastro de si acertó es una caja negra que opina.
+   */
+  const track = useMemo(() => {
+    const judged = past.filter((r) => r.outcome_verdict === 'correcta' || r.outcome_verdict === 'incorrecta')
+    if (!judged.length) return null
+    const right = judged.filter((r) => r.outcome_verdict === 'correcta').length
+    return { total: judged.length, right, pct: (right / judged.length) * 100 }
+  }, [past])
 
   if (loading) {
     return (
@@ -59,28 +78,76 @@ export function Opportunities() {
     )
   }
 
-  if (!opportunities.length) {
-    return (
-      <div className="animate-fade-up">
-        <EmptyState
-          icon="🚀"
-          title="Sin oportunidades vigentes"
-          description="El análisis corre dos veces por día y solo guarda ideas con convicción real. Que no haya nada acá significa que hoy no vio nada que justifique mover plata."
-        />
-      </div>
-    )
-  }
-
   return (
     <div className="animate-fade-up space-y-4">
-      <ul className="space-y-3">
-        {opportunities.map((opportunity) => (
-          <OpportunityCard key={opportunity.id} opportunity={opportunity} />
-        ))}
-      </ul>
+      {track && (
+        <Card>
+          <div className="flex items-baseline justify-between">
+            <p className="text-secondary text-[13px]">Cómo viene el asesor</p>
+            <p className="tnum text-primary text-[15px] font-semibold">
+              {track.right} de {track.total}
+            </p>
+          </div>
+          <div className="bg-elevated mt-2.5 h-1.5 overflow-hidden rounded-full">
+            <div
+              className="bg-accent h-full rounded-full"
+              style={{ width: `${track.pct}%` }}
+            />
+          </div>
+          <p className="text-muted mt-2 text-[12px] leading-relaxed">
+            Recomendaciones que acertaron la dirección del precio a 30 días. Un historial corto no
+            dice mucho — mirá la tendencia con el tiempo, no el primer puñado.
+          </p>
+        </Card>
+      )}
+
+      {active.length === 0 ? (
+        <EmptyState
+          icon="🧭"
+          title="Sin recomendaciones vigentes"
+          description="El asesor analiza dos veces por día y solo guarda acciones con fundamento. Que no haya nada acá significa que hoy no vio motivo para mover plata — eso también es información."
+        />
+      ) : (
+        <ul className="space-y-3">
+          {active.map((rec) => (
+            <RecommendationCard key={rec.id} rec={rec} />
+          ))}
+        </ul>
+      )}
+
+      {past.length > 0 && (
+        <details className="card px-5 py-3.5">
+          <summary className="text-secondary cursor-pointer text-[13px]">
+            Recomendaciones anteriores ({past.length})
+          </summary>
+          <ul className="mt-3 space-y-2.5">
+            {past.map((rec) => (
+              <li key={rec.id} className="flex items-center gap-2.5">
+                <span
+                  className={`h-2 w-2 shrink-0 rounded-full ${
+                    rec.outcome_verdict === 'correcta'
+                      ? 'bg-gain'
+                      : rec.outcome_verdict === 'incorrecta'
+                        ? 'bg-loss'
+                        : 'bg-muted'
+                  }`}
+                  aria-hidden
+                />
+                <span className="text-primary text-[13px] font-semibold">{rec.symbol}</span>
+                <span className="text-muted text-[12px]">{rec.action}</span>
+                {rec.outcome_pct != null && (
+                  <span className="tnum text-secondary ml-auto text-[12px]">
+                    {formatPct(rec.outcome_pct, 1)}
+                  </span>
+                )}
+              </li>
+            ))}
+          </ul>
+        </details>
+      )}
 
       <p className="text-muted text-center text-[11px] leading-relaxed">
-        Análisis generado por IA a partir de tu cartera y las noticias recientes.
+        Análisis generado por IA a partir de tu cartera y las noticias.
         <br />
         No es asesoramiento financiero — verificá antes de operar.
       </p>

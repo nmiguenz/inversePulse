@@ -140,6 +140,33 @@ SELECT cron.schedule(
   $$
 );
 
+-- portfolio-advisor: reemplaza a analyze-opportunities. Mismo horario.
+SELECT cron.unschedule('analyze-opportunities');
+SELECT cron.schedule(
+  'portfolio-advisor',
+  '0 14,19 * * 1-5',
+  $$
+  SELECT net.http_post(
+    url := 'https://kfxnspxwmcepgzqycjfa.supabase.co/functions/v1/portfolio-advisor',
+    headers := cron_auth_headers(),
+    timeout_milliseconds := 180000
+  );
+  $$
+);
+
+-- evaluate-recommendations: diaria. No usa IA, solo compara precios.
+SELECT cron.schedule(
+  'evaluate-recommendations',
+  '30 12 * * *',
+  $$
+  SELECT net.http_post(
+    url := 'https://kfxnspxwmcepgzqycjfa.supabase.co/functions/v1/evaluate-recommendations',
+    headers := cron_auth_headers(),
+    timeout_milliseconds := 60000
+  );
+  $$
+);
+
 -- Ver estado / revisar corridas / borrar:
 --   SELECT jobid, jobname, schedule, active FROM cron.job;
 --   SELECT * FROM cron.job_run_details ORDER BY start_time DESC LIMIT 20;
