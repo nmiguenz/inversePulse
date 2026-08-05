@@ -88,24 +88,31 @@ Deno.serve(async (req) => {
   const sourceResults: Record<string, string> = {}
   const candidates: Array<FeedItem & { source: string }> = []
 
-  for (const source of sources) {
-    try {
-      const items = await fetchFeed(source.url)
-      stats.fetched += items.length
-      sourceResults[source.slug] = `${items.length} items`
-      for (const item of items) candidates.push({ ...item, source: source.slug })
+  // En paralelo: en serie, 7 fuentes × hasta 15s de timeout consumían casi todo
+  // el presupuesto de 150s de la Edge Function antes de llamar a Claude.
+  const feeds = await Promise.allSettled(sources.map((source) => fetchFeed(source.url)))
 
-      await db
-        .from('rss_sources')
-        .update({ last_fetched_at: new Date().toISOString(), last_error: null })
-        .eq('id', source.id)
-    } catch (err) {
+  for (const [i, result] of feeds.entries()) {
+    const source = sources[i]
+
+    if (result.status === 'rejected') {
       // Una fuente rota no puede tumbar el ciclo entero
-      const message = err instanceof Error ? err.message : String(err)
+      const message =
+        result.reason instanceof Error ? result.reason.message : String(result.reason)
       sourceResults[source.slug] = `error: ${message}`
       await db.from('rss_sources').update({ last_error: message }).eq('id', source.id)
       console.error(`[fetch-news] ${source.slug}:`, message)
+      continue
     }
+
+    stats.fetched += result.value.length
+    sourceResults[source.slug] = `${result.value.length} items`
+    for (const item of result.value) candidates.push({ ...item, source: source.slug })
+
+    await db
+      .from('rss_sources')
+      .update({ last_fetched_at: new Date().toISOString(), last_error: null })
+      .eq('id', source.id)
   }
 
   // ---------- 2. Dedupe: dentro de la corrida y contra lo ya guardado ----------
@@ -149,28 +156,43 @@ Deno.serve(async (req) => {
   const alertPayloads: Array<{ analysis: NewsAnalysis; item: FeedItem & { source: string } }> = []
   const errors: string[] = []
 
+  // Los lotes van EN PARALELO: en serie, 4 llamadas más los fetches de RSS
+  // superan el timeout de 150s de las Edge Functions y se pierde la corrida
+  // entera (incluido lo ya analizado, que igual se pagó).
+  const batches: Array<typeof toAnalyze> = []
   for (let i = 0; i < toAnalyze.length; i += BATCH_SIZE) {
-    const batch = toAnalyze.slice(i, i + BATCH_SIZE)
-    const inputs = batch.map((item, idx) => ({
-      index: idx,
-      title: item.title,
-      source: item.source,
-      snippet: item.snippet,
-    }))
+    batches.push(toAnalyze.slice(i, i + BATCH_SIZE))
+  }
 
-    let analyses: NewsAnalysis[] = []
-    try {
-      analyses = await analyzeNews(inputs, topics, holdings)
-      stats.analyzed += analyses.length
-    } catch (err) {
-      // Un lote que falla no debe desaparecer sin dejar rastro en la respuesta
-      const message = err instanceof Error ? err.message : String(err)
+  const settled = await Promise.allSettled(
+    batches.map((batch) =>
+      analyzeNews(
+        batch.map((item, idx) => ({
+          index: idx,
+          title: item.title,
+          source: item.source,
+          snippet: item.snippet,
+        })),
+        topics,
+        holdings,
+      ),
+    ),
+  )
+
+  for (const [batchIndex, result] of settled.entries()) {
+    const batch = batches[batchIndex]
+
+    if (result.status === 'rejected') {
+      const message =
+        result.reason instanceof Error ? result.reason.message : String(result.reason)
       errors.push(message)
       console.error('[fetch-news] análisis falló:', message)
       continue
     }
 
-    for (const analysis of analyses) {
+    stats.analyzed += result.value.length
+
+    for (const analysis of result.value) {
       const item = batch[analysis.index]
       if (!item) continue
 

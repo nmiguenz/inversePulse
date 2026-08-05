@@ -23,18 +23,32 @@ CREATE EXTENSION IF NOT EXISTS supabase_vault;
 
 -- Arma el header de autorización leyendo la key de Vault.
 -- SECURITY DEFINER porque vault.decrypted_secrets solo lo lee el owner.
+--
+-- Falla RUIDOSAMENTE si el secret no está: la versión anterior devolvía
+-- 'Bearer ' || NULL = NULL, así que los jobs salían sin Authorization y
+-- morían con un 401 que nadie veía. Un día entero sin sincronizar y ni un
+-- error en ningún lado. Ahora la excepción queda en cron.job_run_details.
 CREATE OR REPLACE FUNCTION cron_auth_headers()
 RETURNS JSONB
-LANGUAGE sql
+LANGUAGE plpgsql
 SECURITY DEFINER
 SET search_path = public, vault
 AS $$
-  SELECT jsonb_build_object(
+DECLARE
+  key TEXT;
+BEGIN
+  SELECT decrypted_secret INTO key FROM vault.decrypted_secrets WHERE name = 'service_role_key';
+
+  IF key IS NULL OR key = '' THEN
+    RAISE EXCEPTION
+      'Falta el secret "service_role_key" en Vault. Corré: select vault.create_secret(''<SERVICE_ROLE_KEY>'', ''service_role_key'');';
+  END IF;
+
+  RETURN jsonb_build_object(
     'Content-Type', 'application/json',
-    'Authorization', 'Bearer ' || (
-      SELECT decrypted_secret FROM vault.decrypted_secrets WHERE name = 'service_role_key'
-    )
+    'Authorization', 'Bearer ' || key
   );
+END;
 $$;
 
 -- Que no la pueda llamar nadie desde la API: devuelve la key en texto plano.
