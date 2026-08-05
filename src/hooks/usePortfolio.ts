@@ -1,4 +1,13 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import {
+  createContext,
+  createElement,
+  useCallback,
+  useContext,
+  useEffect,
+  useMemo,
+  useState,
+  type ReactNode,
+} from 'react'
 import { supabase, isSupabaseConfigured } from '@/lib/supabase'
 import { useAuth } from '@/lib/auth'
 import type { AccountBalance, DollarRate, IolStatus, Position, PricePoint } from '@/lib/types'
@@ -24,6 +33,20 @@ const EMPTY: PortfolioData = {
   iolStatus: null,
 }
 
+type PortfolioState = {
+  positions: ReturnType<typeof withMetrics>
+  balance: AccountBalance | null
+  latestRates: Map<string, DollarRate>
+  historyBySymbol: Map<string, number[]>
+  snapshots: Snapshot[]
+  iolStatus: IolStatus | null
+  loading: boolean
+  error: string | null
+  reload: () => Promise<void>
+}
+
+const PortfolioContext = createContext<PortfolioState | null>(null)
+
 /** Últimos 30 días de cierres, para los sparklines */
 function since(days: number): string {
   const d = new Date()
@@ -31,7 +54,17 @@ function since(days: number): string {
   return d.toISOString().slice(0, 10)
 }
 
-export function usePortfolio() {
+/**
+ * Provider único de la cartera.
+ *
+ * Tiene que ser un provider y no un hook suelto: lo consumen el Dashboard,
+ * Config, la pantalla de noticias y el gestor de earnings. Con un hook, cada
+ * pantalla abría su propio canal de realtime con el MISMO topic
+ * (`portfolio:<user>`), y supabase-js reusa el canal por nombre — la segunda
+ * suscripción falla con "cannot add postgres_changes callbacks after
+ * subscribe()". Es el mismo problema que ya había aparecido en useAlerts.
+ */
+export function PortfolioProvider({ children }: { children: ReactNode }) {
   const { session } = useAuth()
   const userId = session?.user.id
   const [data, setData] = useState<PortfolioData>(EMPTY)
@@ -113,15 +146,26 @@ export function usePortfolio() {
     return map
   }, [data.history])
 
-  return {
-    positions,
-    balance: data.balance,
-    latestRates,
-    historyBySymbol,
-    snapshots: data.snapshots,
-    iolStatus: data.iolStatus,
-    loading,
-    error,
-    reload: load,
-  }
+  const value = useMemo<PortfolioState>(
+    () => ({
+      positions,
+      balance: data.balance,
+      latestRates,
+      historyBySymbol,
+      snapshots: data.snapshots,
+      iolStatus: data.iolStatus,
+      loading,
+      error,
+      reload: load,
+    }),
+    [positions, data.balance, latestRates, historyBySymbol, data.snapshots, data.iolStatus, loading, error, load],
+  )
+
+  return createElement(PortfolioContext.Provider, { value }, children)
+}
+
+export function usePortfolio(): PortfolioState {
+  const ctx = useContext(PortfolioContext)
+  if (!ctx) throw new Error('usePortfolio debe usarse dentro de <PortfolioProvider>')
+  return ctx
 }

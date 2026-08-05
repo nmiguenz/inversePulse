@@ -1,14 +1,16 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { EmptyState } from '@/components/ui/Card'
 import { OpportunityCard } from '@/components/opportunities/OpportunityCard'
 import { supabase, isSupabaseConfigured } from '@/lib/supabase'
 import { useAuth } from '@/lib/auth'
+import { uniqueChannelName } from '@/lib/realtime'
 import type { Opportunity } from '@/lib/types'
 
 export function Opportunities() {
   const { session } = useAuth()
   const [opportunities, setOpportunities] = useState<Opportunity[]>([])
   const [loading, setLoading] = useState(true)
+  const channelName = useRef(uniqueChannelName('opportunities-feed'))
 
   const load = useCallback(async () => {
     if (!isSupabaseConfigured || !session) {
@@ -38,7 +40,7 @@ export function Opportunities() {
     if (!isSupabaseConfigured || !session) return
 
     const channel = supabase
-      .channel('opportunities-feed')
+      .channel(channelName.current)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'opportunities' }, () => void load())
       .subscribe()
 

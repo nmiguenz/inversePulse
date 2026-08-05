@@ -1,6 +1,7 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { supabase, isSupabaseConfigured } from '@/lib/supabase'
 import { useAuth } from '@/lib/auth'
+import { uniqueChannelName } from '@/lib/realtime'
 import type { NewsItem, WorldTopic } from '@/lib/types'
 
 /**
@@ -16,6 +17,7 @@ export function useNews(tag: string | null) {
   const [news, setNews] = useState<NewsItem[]>([])
   const [topics, setTopics] = useState<WorldTopic[]>([])
   const [loading, setLoading] = useState(true)
+  const channelName = useRef(uniqueChannelName('news-feed'))
 
   const load = useCallback(async () => {
     if (!isSupabaseConfigured || !session) {
@@ -56,7 +58,7 @@ export function useNews(tag: string | null) {
     if (!isSupabaseConfigured || !session) return
 
     const channel = supabase
-      .channel('news-feed')
+      .channel(channelName.current)
       .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'news' }, () => void load())
       .subscribe()
 
