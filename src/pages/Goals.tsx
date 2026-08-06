@@ -6,27 +6,57 @@ import { usePortfolio } from '@/hooks/usePortfolio'
 import { formatARS, formatPct, toneOf, toneText } from '@/lib/format'
 import type { Goal } from '@/lib/types'
 
-/** Cuánto falta para la fecha objetivo, en palabras */
+type GoalInput = {
+  name: string
+  description?: string | null
+  target_date?: string | null
+  target_amount?: number | null
+  emoji?: string
+}
+
+/**
+ * Cuánto falta para la fecha objetivo.
+ *
+ * Ambas fechas se anclan al mediodía local antes de restar. Comparar contra
+ * `Date.now()` metía la hora del día en la cuenta: a la mañana faltaba medio
+ * día de más y a la tarde medio de menos, y el redondeo daba "faltan 0 días"
+ * para una fecha futura o "falta 1 día" para hoy.
+ */
 function timeLeft(date: string | null): string | null {
   if (!date) return null
-  const days = Math.round((new Date(`${date}T12:00:00`).getTime() - Date.now()) / 864e5)
+
+  const target = new Date(`${date}T12:00:00`).getTime()
+  if (Number.isNaN(target)) return null
+
+  const now = new Date()
+  const todayNoon = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 12).getTime()
+  const days = Math.round((target - todayNoon) / 864e5)
   if (days < 0) return 'fecha cumplida'
+  if (days === 0) return 'es hoy'
+  if (days === 1) return 'falta 1 día'
   if (days < 60) return `faltan ${days} días`
+
   const months = Math.round(days / 30)
   if (months < 24) return `faltan ${months} meses`
-  return `faltan ${Math.round(months / 12)} años`
+
+  const years = days / 365
+  const rounded = Math.round(years * 10) / 10
+  return `faltan ${rounded % 1 === 0 ? rounded.toFixed(0) : rounded.toFixed(1)} años`
 }
 
 export function Goals() {
-  const { goals, holdings, loading, createGoal, assign, unassign, removeGoal } = useGoals()
+  const { goals, holdings, loading, createGoal, updateGoal, assign, unassign, removeGoal } = useGoals()
   const { positions } = usePortfolio()
   const [creating, setCreating] = useState(false)
   const [expanded, setExpanded] = useState<string | null>(null)
 
   const totalAssigned = useMemo(() => goals.reduce((s, g) => s + Number(g.current_value), 0), [goals])
+  const totalCost = useMemo(() => goals.reduce((s, g) => s + Number(g.cost_basis), 0), [goals])
   const portfolioTotal = useMemo(() => positions.reduce((s, p) => s + p.value, 0), [positions])
 
   if (loading) return <div className="card h-40 animate-pulse" />
+
+  const totalGain = totalAssigned - totalCost
 
   return (
     <div className="animate-fade-up space-y-4">
@@ -36,9 +66,17 @@ export function Goals() {
           <p className="font-display tnum text-primary mt-1.5 text-[26px] leading-none font-bold">
             {formatARS(totalAssigned)}
           </p>
-          <p className="text-muted mt-1.5 text-[12px]">
-            {portfolioTotal > 0 ? `${((totalAssigned / portfolioTotal) * 100).toFixed(1)}% de tu cartera` : ''}
-            {' · el resto queda libre'}
+          <div className="mt-2 flex items-baseline gap-2">
+            {totalCost > 0 && (
+              <span className={`tnum text-[13px] font-medium ${toneText[toneOf(totalGain)]}`}>
+                {formatPct((totalGain / totalCost) * 100, 1)} desde que lo apartaste
+              </span>
+            )}
+          </div>
+          <p className="text-muted mt-1 text-[12px]">
+            {portfolioTotal > 0
+              ? `${((totalAssigned / portfolioTotal) * 100).toFixed(1)}% de tu cartera · el resto queda libre`
+              : ''}
           </p>
         </Card>
       )}
@@ -59,6 +97,7 @@ export function Goals() {
               positions={positions}
               expanded={expanded === goal.id}
               onToggle={() => setExpanded(expanded === goal.id ? null : goal.id)}
+              onUpdate={updateGoal}
               onAssign={assign}
               onUnassign={unassign}
               onRemove={removeGoal}
@@ -68,7 +107,17 @@ export function Goals() {
       )}
 
       {creating ? (
-        <NewGoalForm onCancel={() => setCreating(false)} onCreate={createGoal} />
+        <Card>
+          <SectionTitle>Nueva meta</SectionTitle>
+          <GoalForm
+            onCancel={() => setCreating(false)}
+            onSubmit={async (input) => {
+              const result = await createGoal(input)
+              if (!result.error) setCreating(false)
+              return result
+            }}
+          />
+        </Card>
       ) : (
         <button
           type="button"
@@ -88,6 +137,7 @@ function GoalCard({
   positions,
   expanded,
   onToggle,
+  onUpdate,
   onAssign,
   onUnassign,
   onRemove,
@@ -97,6 +147,7 @@ function GoalCard({
   positions: ReturnType<typeof usePortfolio>['positions']
   expanded: boolean
   onToggle: () => void
+  onUpdate: (id: string, input: GoalInput) => Promise<{ error: string | null }>
   onAssign: (goalId: string, symbol: string, quantity: number) => Promise<{ error: string | null }>
   onUnassign: (id: string) => Promise<void>
   onRemove: (id: string) => Promise<void>
@@ -104,13 +155,15 @@ function GoalCard({
   const [symbol, setSymbol] = useState('')
   const [quantity, setQuantity] = useState('')
   const [error, setError] = useState('')
+  const [editing, setEditing] = useState(false)
 
-  const gain = Number(goal.current_value) - Number(goal.cost_basis)
-  const gainPct = Number(goal.cost_basis) > 0 ? (gain / Number(goal.cost_basis)) * 100 : 0
-  const progress =
-    goal.target_amount && Number(goal.target_amount) > 0
-      ? Math.min(100, (Number(goal.current_value) / Number(goal.target_amount)) * 100)
-      : null
+  const value = Number(goal.current_value)
+  const cost = Number(goal.cost_basis)
+  const gain = value - cost
+  const gainPct = cost > 0 ? (gain / cost) * 100 : 0
+  const target = goal.target_amount ? Number(goal.target_amount) : null
+  const progress = target && target > 0 ? Math.min(100, (value / target) * 100) : null
+  const remaining = timeLeft(goal.target_date)
 
   async function add(e: FormEvent) {
     e.preventDefault()
@@ -125,6 +178,23 @@ function GoalCard({
     }
   }
 
+  if (editing) {
+    return (
+      <li className="card p-5">
+        <SectionTitle>Editar meta</SectionTitle>
+        <GoalForm
+          initial={goal}
+          onCancel={() => setEditing(false)}
+          onSubmit={async (input) => {
+            const result = await onUpdate(goal.id, input)
+            if (!result.error) setEditing(false)
+            return result
+          }}
+        />
+      </li>
+    )
+  }
+
   return (
     <li className="card p-5">
       <button type="button" onClick={onToggle} className="w-full text-left">
@@ -134,15 +204,13 @@ function GoalCard({
               <span aria-hidden>{goal.emoji ?? '🎯'}</span>
               {goal.name}
             </p>
-            {goal.description && (
-              <p className="text-muted mt-0.5 text-[12px]">{goal.description}</p>
-            )}
+            {goal.description && <p className="text-muted mt-0.5 text-[12px]">{goal.description}</p>}
           </div>
           <div className="shrink-0 text-right">
             <p className="font-display tnum text-primary text-[19px] leading-none font-bold">
-              {formatARS(Number(goal.current_value))}
+              {formatARS(value)}
             </p>
-            {Number(goal.cost_basis) > 0 && (
+            {cost > 0 && (
               <p className={`tnum mt-1 text-[12px] ${toneText[toneOf(gain)]}`}>
                 {formatPct(gainPct, 1)}
               </p>
@@ -150,25 +218,29 @@ function GoalCard({
           </div>
         </div>
 
-        {progress != null && (
+        {/* Con meta de dinero: barra de progreso. Sin meta: solo lo acumulado,
+            que para un ahorro a largo plazo es igual de informativo. */}
+        {progress != null ? (
           <div className="mt-3">
             <div className="bg-elevated h-1.5 overflow-hidden rounded-full">
               <div className="gradient-accent h-full rounded-full" style={{ width: `${progress}%` }} />
             </div>
             <p className="text-muted mt-1.5 text-[12px]">
-              {progress.toFixed(0)}% de {formatARS(Number(goal.target_amount))}
-              {timeLeft(goal.target_date) ? ` · ${timeLeft(goal.target_date)}` : ''}
+              {progress.toFixed(0)}% de {formatARS(target!)}
+              {remaining ? ` · ${remaining}` : ''}
             </p>
           </div>
-        )}
-
-        {progress == null && timeLeft(goal.target_date) && (
-          <p className="text-muted mt-2 text-[12px]">{timeLeft(goal.target_date)}</p>
+        ) : (
+          (remaining || cost > 0) && (
+            <p className="text-muted mt-2 text-[12px]">
+              {cost > 0 ? `${formatARS(gain)} ganados` : ''}
+              {cost > 0 && remaining ? ' · ' : ''}
+              {remaining ?? ''}
+            </p>
+          )
         )}
       </button>
 
-      {/* Si vendiste en IOL y quedaste por debajo de lo apartado, se avisa en vez
-          de mostrar un valor que ya no corresponde */}
       {goal.over_allocated && (
         <p className="bg-warning-soft text-warning mt-3 rounded-xl px-3 py-2 text-[12px] leading-relaxed">
           Vendiste parte de un activo asignado a esta meta. Ajustá las cantidades para que el valor
@@ -243,112 +315,122 @@ function GoalCard({
 
           {error && <p className="text-loss mt-2 text-[12px] leading-relaxed">{error}</p>}
 
-          <button
-            type="button"
-            onClick={() => void onRemove(goal.id)}
-            className="text-muted active:text-loss mt-4 text-[12px]"
-          >
-            Eliminar meta
-          </button>
+          <div className="mt-4 flex gap-4">
+            <button
+              type="button"
+              onClick={() => setEditing(true)}
+              className="text-accent text-[12px]"
+            >
+              Editar meta
+            </button>
+            <button
+              type="button"
+              onClick={() => void onRemove(goal.id)}
+              className="text-muted active:text-loss text-[12px]"
+            >
+              Eliminar
+            </button>
+          </div>
         </div>
       )}
     </li>
   )
 }
 
-function NewGoalForm({
+/** Mismo formulario para crear y para editar: una sola forma de escribir una meta */
+function GoalForm({
+  initial,
   onCancel,
-  onCreate,
+  onSubmit,
 }: {
+  initial?: Goal
   onCancel: () => void
-  onCreate: (input: {
-    name: string
-    description?: string
-    target_date?: string
-    target_amount?: number
-    emoji?: string
-  }) => Promise<{ error: string | null }>
+  onSubmit: (input: GoalInput) => Promise<{ error: string | null }>
 }) {
-  const [name, setName] = useState('')
-  const [description, setDescription] = useState('')
-  const [targetDate, setTargetDate] = useState('')
-  const [targetAmount, setTargetAmount] = useState('')
-  const [emoji, setEmoji] = useState('🎯')
+  const [name, setName] = useState(initial?.name ?? '')
+  const [description, setDescription] = useState(initial?.description ?? '')
+  const [targetDate, setTargetDate] = useState(initial?.target_date ?? '')
+  const [targetAmount, setTargetAmount] = useState(
+    initial?.target_amount ? String(initial.target_amount) : '',
+  )
+  const [emoji, setEmoji] = useState(initial?.emoji ?? '🎯')
   const [error, setError] = useState('')
 
   async function submit(e: FormEvent) {
     e.preventDefault()
-    const { error: createError } = await onCreate({
+    // Vacío se guarda como null y no como undefined: al editar, undefined
+    // dejaría el valor viejo en vez de borrarlo
+    const { error: submitError } = await onSubmit({
       name,
-      description: description || undefined,
-      target_date: targetDate || undefined,
-      target_amount: targetAmount ? Number(targetAmount) : undefined,
+      description: description || null,
+      target_date: targetDate || null,
+      target_amount: targetAmount ? Number(targetAmount) : null,
       emoji,
     })
-    if (createError) setError(createError)
-    else onCancel()
+    if (submitError) setError(submitError)
   }
 
   return (
-    <Card>
-      <SectionTitle>Nueva meta</SectionTitle>
-      <form onSubmit={submit} className="space-y-2.5">
-        <div className="flex gap-2">
-          <input
-            value={emoji}
-            onChange={(e) => setEmoji(e.target.value.slice(0, 2))}
-            className="border-line bg-elevated w-14 rounded-xl border px-3 py-2.5 text-center text-[16px] outline-none"
-            aria-label="Emoji"
-          />
-          <input
-            value={name}
-            onChange={(e) => setName(e.target.value)}
-            required
-            placeholder="Ahorro de Tomás"
-            className="border-line bg-elevated text-primary flex-1 rounded-xl border px-3 py-2.5 text-[14px] outline-none"
-          />
-        </div>
+    <form onSubmit={submit} className="space-y-2.5">
+      <div className="flex gap-2">
         <input
-          value={description}
-          onChange={(e) => setDescription(e.target.value)}
-          placeholder="Para el viaje de egresados (opcional)"
-          className="border-line bg-elevated text-primary w-full rounded-xl border px-3 py-2.5 text-[13px] outline-none"
+          value={emoji}
+          onChange={(e) => setEmoji(e.target.value.slice(0, 2))}
+          className="border-line bg-elevated w-14 rounded-xl border px-3 py-2.5 text-center text-[16px] outline-none"
+          aria-label="Emoji"
         />
-        <div className="flex gap-2">
-          <input
-            type="date"
-            value={targetDate}
-            onChange={(e) => setTargetDate(e.target.value)}
-            className="border-line bg-elevated text-primary flex-1 rounded-xl border px-3 py-2.5 text-[13px] outline-none"
-            aria-label="Fecha objetivo"
-          />
-          <input
-            type="number"
-            value={targetAmount}
-            onChange={(e) => setTargetAmount(e.target.value)}
-            placeholder="Meta en $"
-            className="border-line bg-elevated text-primary flex-1 rounded-xl border px-3 py-2.5 text-[13px] outline-none"
-          />
-        </div>
+        <input
+          value={name}
+          onChange={(e) => setName(e.target.value)}
+          required
+          placeholder="Ahorro de Tomás"
+          className="border-line bg-elevated text-primary flex-1 rounded-xl border px-3 py-2.5 text-[14px] outline-none"
+        />
+      </div>
+      <input
+        value={description}
+        onChange={(e) => setDescription(e.target.value)}
+        placeholder="Para el viaje de egresados"
+        className="border-line bg-elevated text-primary w-full rounded-xl border px-3 py-2.5 text-[13px] outline-none"
+      />
+      <div className="flex gap-2">
+        <input
+          type="date"
+          value={targetDate}
+          onChange={(e) => setTargetDate(e.target.value)}
+          className="border-line bg-elevated text-primary flex-1 rounded-xl border px-3 py-2.5 text-[13px] outline-none"
+          aria-label="Fecha objetivo"
+        />
+        <input
+          type="number"
+          value={targetAmount}
+          onChange={(e) => setTargetAmount(e.target.value)}
+          placeholder="Meta en $"
+          className="border-line bg-elevated text-primary flex-1 rounded-xl border px-3 py-2.5 text-[13px] outline-none"
+        />
+      </div>
+      <p className="text-muted text-[11px] leading-relaxed">
+        La fecha y el monto son opcionales. Sin monto, la meta muestra cuánto acumulaste y cuánto
+        ganaste — que para un ahorro largo suele ser lo que importa.
+      </p>
 
-        {error && <p className="text-loss text-[12px]">{error}</p>}
+      {error && <p className="text-loss text-[12px]">{error}</p>}
 
-        <div className="flex gap-2 pt-1">
-          <button
-            type="button"
-            onClick={onCancel}
-            className="border-line text-secondary flex-1 rounded-xl border py-2.5 text-[13px]"
-          >
-            Cancelar
-          </button>
-          <button
-            type="submit"
-            className="gradient-accent flex-1 rounded-xl py-2.5 text-[13px] font-semibold text-white"
-          >
-            Crear
-          </button>
-        </div>
-      </form>
-    </Card>
+      <div className="flex gap-2 pt-1">
+        <button
+          type="button"
+          onClick={onCancel}
+          className="border-line text-secondary flex-1 rounded-xl border py-2.5 text-[13px]"
+        >
+          Cancelar
+        </button>
+        <button
+          type="submit"
+          className="gradient-accent flex-1 rounded-xl py-2.5 text-[13px] font-semibold text-white"
+        >
+          {initial ? 'Guardar' : 'Crear'}
+        </button>
+      </div>
+    </form>
   )
 }

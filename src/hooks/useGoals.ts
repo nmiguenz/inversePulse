@@ -32,7 +32,13 @@ export function useGoals() {
   }, [load])
 
   const createGoal = useCallback(
-    async (input: { name: string; description?: string; target_date?: string; target_amount?: number; emoji?: string }) => {
+    async (input: {
+      name: string
+      description?: string | null
+      target_date?: string | null
+      target_amount?: number | null
+      emoji?: string
+    }) => {
       if (!session) return { error: 'sin sesión' }
       const { error } = await supabase
         .from('goal_portfolios')
@@ -41,6 +47,24 @@ export function useGoals() {
       return { error: error?.message ?? null }
     },
     [session, load],
+  )
+
+  const updateGoal = useCallback(
+    async (
+      id: string,
+      input: {
+        name?: string
+        description?: string | null
+        target_date?: string | null
+        target_amount?: number | null
+        emoji?: string
+      },
+    ) => {
+      const { error } = await supabase.from('goal_portfolios').update(input).eq('id', id)
+      if (!error) await load()
+      return { error: error?.message ?? null }
+    },
+    [load],
   )
 
   const assign = useCallback(
@@ -72,5 +96,5 @@ export function useGoals() {
     [load],
   )
 
-  return { goals, holdings, loading, createGoal, assign, unassign, removeGoal, reload: load }
+  return { goals, holdings, loading, createGoal, updateGoal, assign, unassign, removeGoal, reload: load }
 }
