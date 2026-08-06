@@ -12,9 +12,9 @@ type Settings = {
   idle_cash_threshold: number
   monitoring_start: string
   monitoring_end: string
-  notify_critical: boolean
-  notify_warning: boolean
-  notify_info: boolean
+  notify_decisions: boolean
+  notify_opportunities: boolean
+  notify_news: boolean
 }
 
 type SliderDef = {
@@ -38,10 +38,28 @@ const SLIDERS: SliderDef[] = [
   { key: 'idle_cash_threshold', label: 'Cash sin invertir', hint: 'Avisa si tenés más de esto sin rendir', min: 10000, max: 500000, step: 10000, format: formatARS },
 ]
 
+/**
+ * Por categoría y no por severidad.
+ *
+ * La severidad mezclaba cosas distintas: una noticia negativa y un rebalanceo
+ * eran ambos "warning". Lo que importa es si requiere que decidas algo.
+ */
 const TOGGLES = [
-  { key: 'notify_critical' as const, label: 'Críticas', hint: 'Stop loss' },
-  { key: 'notify_warning' as const, label: 'Importantes', hint: 'Rebalanceo, variación extrema, noticias' },
-  { key: 'notify_info' as const, label: 'Info y oportunidades', hint: 'Cash sin invertir, earnings, sugerencias' },
+  {
+    key: 'notify_decisions' as const,
+    label: 'Decisiones',
+    hint: 'Stop loss, toma de ganancia, rebalanceo, concentración, earnings',
+  },
+  {
+    key: 'notify_opportunities' as const,
+    label: 'Oportunidades',
+    hint: 'Recomendaciones del asesor con convicción alta',
+  },
+  {
+    key: 'notify_news' as const,
+    label: 'Noticias',
+    hint: 'Noticias negativas sobre tus activos. Aparecen en Alertas igual.',
+  },
 ]
 
 /**
@@ -135,7 +153,7 @@ export function ThresholdSettings() {
             </span>
             <input
               type="checkbox"
-              checked={settings[toggle.key] !== false}
+              checked={toggle.key === 'notify_news' ? settings[toggle.key] === true : settings[toggle.key] !== false}
               onChange={(e) => void save({ ...settings, [toggle.key]: e.target.checked })}
               className="accent-accent h-5 w-5 shrink-0"
             />

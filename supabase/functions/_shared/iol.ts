@@ -38,6 +38,24 @@ export type IolActivo = {
 
 export type IolPortfolio = { pais: string; activos: IolActivo[] }
 
+/**
+ * Una fila por plazo de liquidación.
+ *
+ * `liquidacion` viene como texto de IOL ("Inmediato" es el único valor que
+ * confirma la documentación; los de 24h y 48h se ven en datos reales). Se
+ * guarda crudo y se traduce en el frontend, para no inventar etiquetas.
+ *
+ * `disponible` ≠ `disponibleOperar`: el segundo es lo que se puede usar para
+ * poner una orden.
+ */
+export type IolSaldo = {
+  liquidacion: string
+  saldo: number
+  comprometido: number
+  disponible: number
+  disponibleOperar: number
+}
+
 export type IolCuenta = {
   numero: string
   tipo: string
@@ -49,6 +67,7 @@ export type IolCuenta = {
   total: number
   margenDescubierto: number
   estado: string
+  saldos?: IolSaldo[]
 }
 
 export type IolEstadoCuenta = {

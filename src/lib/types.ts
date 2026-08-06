@@ -19,8 +19,20 @@ export type Position = {
   updated_at: string
 }
 
+/** Una fila por plazo de liquidación, tal como la manda IOL */
+export type SettlementRow = {
+  liquidacion: string
+  saldo: number
+  comprometido: number
+  disponible: number
+  disponibleOperar: number
+}
+
 export type AccountBalance = {
   available_ars: number
+  /** disponibleOperar: lo que se puede usar para una orden. Puede ser menor. */
+  available_to_trade_ars: number | null
+  settlement_breakdown: SettlementRow[] | null
   committed_ars: number
   available_usd: number
   total_portfolio_value: number

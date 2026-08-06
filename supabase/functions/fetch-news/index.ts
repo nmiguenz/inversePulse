@@ -272,12 +272,14 @@ Deno.serve(async (req) => {
 
       stats.alerts++
 
-      if (user.push_subscription && inserted) {
+      // Las noticias NO notifican por defecto: enterarse no es lo mismo que
+      // tener que decidir algo. La alerta se crea igual y suma al badge, así
+      // que la ves al abrir la app sin que el teléfono te interrumpa.
+      const notifies = (user.settings as Record<string, unknown>)?.notify_news === true
+      if (user.push_subscription && inserted && notifies) {
         const ok = await sendPush(db, user.id, user.push_subscription, {
           title: `Noticia negativa — ${label}`,
           body: item.title,
-          // tag por artículo: si llegan dos push de la misma noticia, el
-          // segundo reemplaza al primero en vez de apilarse
           tag: `news-${inserted.id}`,
           url: '/noticias',
           alertId: inserted.id,

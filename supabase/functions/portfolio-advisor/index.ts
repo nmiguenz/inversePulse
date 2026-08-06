@@ -79,7 +79,7 @@ Deno.serve(async (req) => {
           .from('positions')
           .select('symbol, sector, quantity, current_price, previous_close, market_value, gain_pct')
           .eq('user_id', user.id),
-        db.from('account_balance').select('available_ars').eq('user_id', user.id).maybeSingle(),
+        db.from('account_balance').select('available_ars, available_to_trade_ars').eq('user_id', user.id).maybeSingle(),
         db
           .from('news')
           .select('title, summary, sentiment, related_symbols')
@@ -103,7 +103,9 @@ Deno.serve(async (req) => {
     const valueOf = (p: { market_value: number | null; quantity: number; current_price: number }) =>
       p.market_value || p.quantity * p.current_price
     const totalValue = positions.reduce((s, p) => s + valueOf(p), 0)
-    const availableCash = balance?.available_ars ?? 0
+    // disponibleOperar es lo que se puede ejecutar de verdad; available_ars
+    // puede incluir plata que todavía no liquidó
+    const availableCash = balance?.available_to_trade_ars ?? balance?.available_ars ?? 0
 
     const seriesBySymbol = new Map<string, number[]>()
     for (const row of history ?? []) {
@@ -234,7 +236,8 @@ Deno.serve(async (req) => {
         .select('id')
         .single()
 
-      if (user.push_subscription && alert) {
+      const notifies = (user.settings as Record<string, unknown>)?.notify_opportunities !== false
+      if (user.push_subscription && alert && notifies) {
         const ok = await sendPush(db, user.id, user.push_subscription, {
           title: rec.title,
           body: `Convicción alta · ${rec.symbol}`,

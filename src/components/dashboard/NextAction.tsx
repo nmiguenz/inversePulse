@@ -1,0 +1,109 @@
+import { useCallback, useEffect, useState } from 'react'
+import { useNavigate } from 'react-router-dom'
+import { supabase, isSupabaseConfigured } from '@/lib/supabase'
+import { useAuth } from '@/lib/auth'
+import { AssetLogo } from '@/components/ui/AssetLogo'
+import { formatARS } from '@/lib/format'
+import type { Recommendation } from '@/lib/types'
+
+const ACTION_LABEL: Record<string, string> = {
+  buy: 'Comprar',
+  add: 'Ampliar',
+  trim: 'Reducir',
+  sell: 'Vender',
+  rebalance: 'Rebalancear',
+}
+
+/**
+ * Lo que conviene hacer, arriba de todo.
+ *
+ * Muestra SOLO convicción alta. Si destacara siempre algo, dejaría de destacar
+ * — y una app que sugiere operar todos los días empuja a operar de más, que es
+ * la forma más común de perder plata.
+ */
+export function NextAction() {
+  const navigate = useNavigate()
+  const { session } = useAuth()
+  const [rec, setRec] = useState<Recommendation | null>(null)
+  const [loading, setLoading] = useState(true)
+
+  const load = useCallback(async () => {
+    if (!isSupabaseConfigured || !session) {
+      setLoading(false)
+      return
+    }
+
+    const { data } = await supabase
+      .from('recommendations')
+      .select('*')
+      .eq('is_active', true)
+      .eq('confidence', 'high')
+      .neq('action', 'hold')
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .maybeSingle()
+
+    setRec((data ?? null) as Recommendation | null)
+    setLoading(false)
+  }, [session])
+
+  useEffect(() => {
+    void load()
+  }, [load])
+
+  if (loading) return <div className="card h-[104px] animate-pulse" />
+
+  if (!rec) {
+    return (
+      <div className="card px-5 py-4">
+        <p className="text-secondary text-[13px]">
+          <span className="mr-1.5" aria-hidden>
+            ✓
+          </span>
+          Nada urgente hoy
+        </p>
+        <p className="text-muted mt-1 text-[12px] leading-relaxed">
+          El asesor no encontró ninguna acción con convicción alta. No hacer nada también es una
+          decisión.
+        </p>
+      </div>
+    )
+  }
+
+  return (
+    <button
+      type="button"
+      onClick={() => navigate('/oportunidades')}
+      className="card w-full p-5 text-left"
+      style={{ borderLeft: '3px solid var(--color-accent)' }}
+    >
+      <p className="text-accent text-[12px] font-medium">Conviene hacer</p>
+
+      <div className="mt-2.5 flex items-center gap-3">
+        <AssetLogo symbol={rec.symbol} />
+        <div className="min-w-0 flex-1">
+          <p className="text-primary text-[15px] font-semibold">
+            {ACTION_LABEL[rec.action] ?? rec.action} {rec.symbol}
+            {rec.counterpart_symbol && (
+              <span className="text-muted font-normal"> desde {rec.counterpart_symbol}</span>
+            )}
+          </p>
+          {rec.suggested_amount != null && (
+            <p className="tnum text-secondary mt-0.5 text-[13px]">
+              {formatARS(rec.suggested_amount)}
+              {rec.suggested_quantity ? ` · ${rec.suggested_quantity} CEDEARs` : ''}
+            </p>
+          )}
+        </div>
+      </div>
+
+      <p className="text-secondary mt-3 line-clamp-2 text-[13px] leading-relaxed">{rec.title}</p>
+
+      {rec.realizes_loss && (
+        <p className="text-loss mt-2 text-[12px]">Esta venta cristaliza una pérdida</p>
+      )}
+
+      <p className="text-accent mt-2.5 text-[12px] font-medium">Ver el análisis completo →</p>
+    </button>
+  )
+}

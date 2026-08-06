@@ -27,9 +27,9 @@ type Settings = {
   idle_cash_threshold: number
   monitoring_start: string
   monitoring_end: string
-  notify_critical: boolean
-  notify_warning: boolean
-  notify_info: boolean
+  notify_decisions: boolean
+  notify_opportunities: boolean
+  notify_news: boolean
 }
 
 type Position = {
@@ -168,10 +168,15 @@ function evaluate(positions: Position[], availableCash: number, s: Settings): Ca
   return out
 }
 
-function shouldNotify(severity: Severity, s: Settings): boolean {
-  if (severity === 'critical') return s.notify_critical !== false
-  if (severity === 'warning') return s.notify_warning !== false
-  return s.notify_info !== false
+/**
+ * Todo lo que evalúa esta función es una DECISIÓN: cruzaste un umbral y hay que
+ * ver si hacés algo. Por eso una sola categoría alcanza.
+ *
+ * Antes se decidía por severidad, lo que metía en la misma bolsa un stop loss y
+ * una noticia negativa (ambos "warning") aunque uno pida acción y el otro no.
+ */
+function shouldNotify(s: Settings): boolean {
+  return s.notify_decisions !== false
 }
 
 async function evaluateUser(user: { id: string; settings: Settings; push_subscription: unknown }) {
@@ -215,7 +220,7 @@ async function evaluateUser(user: { id: string; settings: Settings; push_subscri
   if (user.push_subscription && withinMonitoringHours(settings)) {
     for (const alert of inserted ?? []) {
       const severity = alert.severity as Severity
-      if (!shouldNotify(severity, settings)) continue
+      if (!shouldNotify(settings)) continue
 
       const payload: PushPayload = {
         title: alert.title,

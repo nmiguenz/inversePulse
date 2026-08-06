@@ -110,9 +110,21 @@ async function syncUser(userId: string) {
     .eq('user_id', userId)
     .maybeSingle()
 
+  // El desglose por plazo de liquidación se guarda crudo: las etiquetas de
+  // `liquidacion` las traduce el frontend, así una etiqueta nueva de IOL no
+  // rompe nada acá.
+  const saldos = cuentaArs?.saldos ?? []
+  // Lo que realmente se puede usar para operar. Si IOL no manda el desglose,
+  // se cae al `disponible` plano en vez de dejarlo en cero.
+  const availableToTrade = saldos.length
+    ? saldos.reduce((sum, s) => sum + (s.disponibleOperar ?? 0), 0)
+    : (cuentaArs?.disponible ?? 0)
+
   const balance = {
     user_id: userId,
     available_ars: cuentaArs?.disponible ?? 0,
+    available_to_trade_ars: availableToTrade,
+    settlement_breakdown: saldos.length ? saldos : null,
     committed_ars: cuentaArs?.comprometido ?? 0,
     available_usd: cuentaUsd?.disponible ?? 0,
     total_portfolio_value: totalValue,

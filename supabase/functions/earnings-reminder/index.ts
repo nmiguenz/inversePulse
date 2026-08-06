@@ -89,7 +89,9 @@ Deno.serve(async (req) => {
         .select('id')
         .single()
 
-      if (user.push_subscription && alert) {
+      // Un earnings próximo es una decisión: podés querer ajustar antes del reporte
+      const notifies = (user.settings as Record<string, unknown>)?.notify_decisions !== false
+      if (user.push_subscription && alert && notifies) {
         const ok = await sendPush(db, user.id, user.push_subscription, {
           title: `${earnings.symbol} reporta ${when}`,
           body: 'Los earnings suelen mover el precio con fuerza. Evaluá la posición.',

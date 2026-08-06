@@ -7,6 +7,8 @@ import { SectorDonut } from '@/components/dashboard/SectorDonut'
 import { PortfolioChart } from '@/components/dashboard/PortfolioChart'
 import { PositionRow } from '@/components/dashboard/PositionRow'
 import { DollarStrip } from '@/components/dashboard/DollarStrip'
+import { NextAction } from '@/components/dashboard/NextAction'
+import { CashCard } from '@/components/dashboard/CashCard'
 import { usePortfolio } from '@/hooks/usePortfolio'
 import { usePullToRefresh } from '@/hooks/usePullToRefresh'
 import { PullIndicator } from '@/components/ui/PullIndicator'
@@ -101,6 +103,9 @@ export function Dashboard() {
         </p>
       </Card>
 
+      {/* Lo que conviene hacer, antes que cualquier métrica */}
+      <NextAction />
+
       {/* Métricas rápidas */}
       <div className="grid grid-cols-2 gap-3">
         <MetricCard
@@ -116,11 +121,7 @@ export function Dashboard() {
           tone={derived.worst ? derived.worst.gain : 'neutral'}
         />
       </div>
-      <MetricCard
-        label="Cash disponible"
-        value={formatARS(balance?.available_ars ?? 0, true)}
-        subLabel={balance?.committed_ars ? `${formatARS(balance.committed_ars)} comprometido` : 'sin rendir'}
-      />
+      <CashCard balance={balance} />
 
       {/* Metas: apartar parte de lo que ya tenés para un objetivo */}
       <button
