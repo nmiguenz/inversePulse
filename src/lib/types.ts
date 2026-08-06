@@ -65,8 +65,19 @@ export type Goal = {
   emoji: string | null
   target_date: string | null
   target_amount: number | null
+  /** Tenencias apartadas + efectivo apartado */
   current_value: number
   cost_basis: number
+  /** Solo lo invertido, sin el efectivo quieto */
+  invested_value: number
+  invested_cost: number
+  /** Efectivo apartado para la meta */
+  cash_ars: number
+  /** Primera vez que superó el objetivo. La meta no se cierra: sigue sumando. */
+  reached_at: string | null
+  /** Con cuántos días de anticipación avisar que conviene pasar a algo seguro */
+  derisk_days: number
+  plan_generated_at: string | null
   holdings_count: number
   /** Vendiste y quedaste por debajo de lo que tenías apartado */
   over_allocated: boolean | null

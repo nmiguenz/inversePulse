@@ -179,6 +179,176 @@ function shouldNotify(s: Settings): boolean {
   return s.notify_decisions !== false
 }
 
+// ============================================================
+// Metas
+// ============================================================
+
+/**
+ * Último día en que se puede vender para tener el dinero acreditado en `date`.
+ *
+ * Primero se apoya en el último día hábil ≤ la fecha, y recién ahí resta los
+ * días de liquidación. Sin ese paso, una fecha objetivo en fin de semana daba
+ * una respuesta tarde: para el sábado 26/9 devolvía "jueves 24", pero una venta
+ * del jueves liquida el lunes 28 — dos días después del cumpleaños.
+ */
+function lastSellDate(date: string, settlementDays: number): string {
+  const d = new Date(`${date}T12:00:00-03:00`)
+
+  // Si la fecha cae fin de semana, el dinero tiene que estar el viernes
+  while (d.getDay() === 0 || d.getDay() === 6) d.setDate(d.getDate() - 1)
+
+  let left = settlementDays
+  while (left > 0) {
+    d.setDate(d.getDate() - 1)
+    if (d.getDay() !== 0 && d.getDay() !== 6) left--
+  }
+  return d.toISOString().slice(0, 10)
+}
+
+function daysUntilDate(date: string | null): number | null {
+  if (!date) return null
+  const target = new Date(`${date}T12:00:00-03:00`).getTime()
+  if (Number.isNaN(target)) return null
+  const today = new Date().toLocaleDateString('en-CA', {
+    timeZone: 'America/Argentina/Buenos_Aires',
+  })
+  return Math.round((target - new Date(`${today}T12:00:00-03:00`).getTime()) / 864e5)
+}
+
+/**
+ * Avisos de las metas.
+ *
+ * Van aparte del resto porque el dedupe es distinto: `goal_reached` tiene que
+ * dispararse UNA vez en la vida de la meta, no una cada 24hs como las alertas
+ * de precio. Y se deduplica por `goal_id`, no por símbolo — una meta no tiene
+ * símbolo, y sin eso dos metas alcanzadas el mismo día generarían un solo
+ * aviso.
+ *
+ * La meta NO se cierra al alcanzarse: se sigue acumulando, que es lo que se
+ * pidió. Lo único que cambia es de qué avisa — de "no llegás" pasa a "cuidá lo
+ * que ya tenés".
+ */
+async function evaluateGoals(userId: string) {
+  const { data: goals } = await db
+    .from('goal_summary')
+    .select('id, name, target_amount, target_date, current_value, reached_at, derisk_days')
+    .eq('user_id', userId)
+    .not('target_amount', 'is', null)
+
+  if (!goals?.length) return []
+
+  // Un solo query para el dedupe de todos los tipos y todas las metas
+  const since = new Date(Date.now() - 14 * 86_400_000).toISOString()
+  const { data: recent } = await db
+    .from('alerts')
+    .select('alert_type, goal_id, created_at')
+    .eq('user_id', userId)
+    .not('goal_id', 'is', null)
+    .gte('created_at', since)
+
+  const lastSeen = new Map<string, string>()
+  for (const a of recent ?? []) {
+    const key = `${a.alert_type}|${a.goal_id}`
+    if (!lastSeen.has(key)) lastSeen.set(key, a.created_at)
+  }
+  const firedWithin = (type: string, goalId: string, days: number) => {
+    const at = lastSeen.get(`${type}|${goalId}`)
+    return !!at && Date.now() - new Date(at).getTime() < days * 86_400_000
+  }
+
+  const out: Array<Record<string, unknown>> = []
+
+  for (const goal of goals) {
+    const target = Number(goal.target_amount)
+    const value = Number(goal.current_value)
+    const daysLeft = daysUntilDate(goal.target_date)
+    const covered = value >= target
+    const money = (n: number) =>
+      `$${Math.round(n).toLocaleString('es-AR', { maximumFractionDigits: 0 })}`
+
+    // 1. Objetivo alcanzado. Una sola vez: lo marca `reached_at`.
+    if (covered && !goal.reached_at) {
+      await db
+        .from('goal_portfolios')
+        .update({ reached_at: new Date().toISOString() })
+        .eq('id', goal.id)
+
+      out.push({
+        alert_type: 'goal_reached',
+        goal_id: goal.id,
+        symbol: null,
+        severity: 'opportunity',
+        title: `Llegaste: ${goal.name}`,
+        message:
+          `${goal.name} alcanzó ${money(value)}, su objetivo de ${money(target)}. ` +
+          `La meta no se cierra: sigue invertida y sumando. Lo que cambia es el riesgo — ` +
+          `de acá en más lo que está en juego es perder lo que ya lograste.`,
+        action_suggested: 'Ver la meta',
+      })
+      continue
+    }
+
+    // 2. Lo habías alcanzado y retrocediste.
+    if (!covered && goal.reached_at && !firedWithin('goal_slipped', goal.id, 7)) {
+      out.push({
+        alert_type: 'goal_slipped',
+        goal_id: goal.id,
+        symbol: null,
+        severity: 'warning',
+        title: `${goal.name} volvió a caer debajo del objetivo`,
+        message:
+          `Está en ${money(value)} y el objetivo es ${money(target)}: faltan ${money(target - value)}. ` +
+          `Ya lo habías alcanzado${daysLeft !== null && daysLeft > 0 ? ` y todavía quedan ${daysLeft} días` : ''}.`,
+        action_suggested: 'Revisar la meta',
+      })
+      continue
+    }
+
+    if (daysLeft === null || daysLeft < 0) continue
+
+    // 3. Desarme: tenés el objetivo cubierto y se acerca la fecha.
+    if (covered && daysLeft <= (goal.derisk_days ?? 30) && !firedWithin('goal_derisk', goal.id, 7)) {
+      // Los CEDEARs liquidan en T+2: para tener la plata EL DÍA de la fecha
+      // hay que vender antes, no ese día
+      const sellBy = lastSellDate(goal.target_date!, 2)
+
+      out.push({
+        alert_type: 'goal_derisk',
+        goal_id: goal.id,
+        symbol: null,
+        severity: 'warning',
+        title: `${goal.name}: conviene asegurar lo logrado`,
+        message:
+          `Tenés ${money(value)} sobre un objetivo de ${money(target)} y faltan ${daysLeft} días. ` +
+          `A esta altura el riesgo ya no es no llegar, es perderlo en una caída de última hora. ` +
+          `Si vas a necesitar la plata el ${goal.target_date}, vendé como máximo el ${sellBy}: ` +
+          `los CEDEARs liquidan en 48 horas hábiles.`,
+        action_suggested: 'Pasar a efectivo o algo de rescate inmediato',
+      })
+      continue
+    }
+
+    // 4. Fuera de camino, pero solo cuando todavía se puede hacer algo.
+    // Avisar "no llegás" faltando nueve años no sirve para nada.
+    if (!covered && daysLeft <= 30 && !firedWithin('goal_off_track', goal.id, 14)) {
+      out.push({
+        alert_type: 'goal_off_track',
+        goal_id: goal.id,
+        symbol: null,
+        severity: 'warning',
+        title: `${goal.name}: faltan ${money(target - value)}`,
+        message:
+          `Quedan ${daysLeft} días y estás en ${money(value)} de ${money(target)}. ` +
+          `Ningún rendimiento razonable cubre esa diferencia en ese plazo: si necesitás el ` +
+          `monto completo, la salida es aportar la diferencia o ajustar el objetivo.`,
+        action_suggested: 'Aportar o ajustar la meta',
+      })
+    }
+  }
+
+  return out
+}
+
 async function evaluateUser(user: { id: string; settings: Settings; push_subscription: unknown }) {
   const [{ data: positions }, { data: balance }] = await Promise.all([
     db
@@ -190,10 +360,11 @@ async function evaluateUser(user: { id: string; settings: Settings; push_subscri
     db.from('account_balance').select('available_ars').eq('user_id', user.id).maybeSingle(),
   ])
 
-  if (!positions?.length) return { evaluated: 0, created: 0 }
-
   const settings = user.settings ?? ({} as Settings)
-  const candidates = evaluate(positions as Position[], balance?.available_ars ?? 0, settings)
+
+  const candidates = positions?.length
+    ? evaluate(positions as Position[], balance?.available_ars ?? 0, settings)
+    : []
 
   // Dedupe: nada del mismo tipo+símbolo en las últimas 24hs
   const since = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString()
@@ -201,10 +372,17 @@ async function evaluateUser(user: { id: string; settings: Settings; push_subscri
     .from('alerts')
     .select('alert_type, symbol')
     .eq('user_id', user.id)
+    .is('goal_id', null)
     .gte('created_at', since)
 
   const seen = new Set((recent ?? []).map((a) => `${a.alert_type}|${a.symbol ?? ''}`))
-  const fresh = candidates.filter((c) => !seen.has(`${c.alert_type}|${c.symbol ?? ''}`))
+
+  // Las de meta traen su propio dedupe: se comparan por goal_id y con ventanas
+  // distintas según el tipo
+  const fresh = [
+    ...candidates.filter((c) => !seen.has(`${c.alert_type}|${c.symbol ?? ''}`)),
+    ...(await evaluateGoals(user.id)),
+  ]
 
   if (!fresh.length) return { evaluated: candidates.length, created: 0 }
 

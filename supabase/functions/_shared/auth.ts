@@ -34,3 +34,32 @@ export function isServiceRole(req: Request): boolean {
 export function unauthorized(): Response {
   return Response.json({ error: 'Se requiere la service role key' }, { status: 401 })
 }
+
+/**
+ * El id del usuario cuando la llamada viene de la app con su sesión.
+ *
+ * La plataforma ya verificó la firma del JWT antes de llegar acá
+ * (`verify_jwt`), así que alcanza con leer el claim `sub`. Se usa en las
+ * functions que además de correr por cron se disparan desde un botón — hoy
+ * solo `goal-advisor`.
+ *
+ * Devuelve null para la anon key, que no tiene `sub`: una key pública no
+ * identifica a nadie.
+ */
+export function userIdFromJwt(req: Request): string | null {
+  const token = req.headers.get('Authorization')?.replace(/^Bearer\s+/i, '').trim()
+  if (!token) return null
+
+  const parts = token.split('.')
+  if (parts.length !== 3) return null
+
+  try {
+    const payload = JSON.parse(
+      atob(parts[1].replace(/-/g, '+').replace(/_/g, '/')),
+    ) as { sub?: string; role?: string }
+    // `authenticated` es el rol de un usuario logueado; la anon key trae `anon`
+    return payload.role === 'authenticated' && payload.sub ? payload.sub : null
+  } catch {
+    return null
+  }
+}

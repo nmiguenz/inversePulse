@@ -304,6 +304,157 @@ export async function advise(ctx: AdvisorContext): Promise<{
   return { recommendations: (parsed.recommendations ?? []).slice(0, 3), usage }
 }
 
+// ============================================================
+// Asesor de una meta puntual
+// ============================================================
+
+export type GoalContext = {
+  name: string
+  targetAmount: number | null
+  targetDate: string | null
+  daysLeft: number | null
+  currentValue: number
+  cashInGoal: number
+  /** Rendimiento anual que pide la meta. null si no hay objetivo o fecha. */
+  requiredAnnualPct: number | null
+  /** comodo | exigente | dificil | improbable | inalcanzable */
+  band: string | null
+  /** A cuánto se llega en la fecha al ritmo de referencia */
+  achievableAmount: number | null
+  earmarked: Array<{ symbol: string; quantity: number; value: number }>
+}
+
+/**
+ * Plan de compra para una meta.
+ *
+ * Dos diferencias con el asesor general, y las dos son deliberadas:
+ *
+ * 1. El horizonte se acota por la fecha. Una meta a 51 días no puede recibir
+ *    una recomendación "long": la API lo impide por schema, no por prompt.
+ *
+ * 2. Una meta difícil NO habilita más riesgo. El modelo recibe la dificultad
+ *    calculada y la instrucción explícita de que un objetivo fuera de alcance
+ *    se responde diciéndolo, no concentrando la cartera. Perseguir un objetivo
+ *    imposible subiendo el riesgo es el mecanismo exacto por el que la gente se
+ *    descapitaliza, y es lo contrario de lo que la app tiene que hacer.
+ */
+export async function adviseForGoal(
+  ctx: AdvisorContext,
+  goal: GoalContext,
+): Promise<{ recommendations: Recommendation[]; usage: { input: number; output: number } }> {
+  // El plazo define qué horizontes son coherentes. Sugerir "6+ meses" para una
+  // meta a 51 días sería una recomendación que no puede cumplirse.
+  const horizons =
+    goal.daysLeft === null
+      ? ['short', 'medium', 'long']
+      : goal.daysLeft <= 60
+        ? ['short']
+        : goal.daysLeft <= 210
+          ? ['short', 'medium']
+          : ['short', 'medium', 'long']
+
+  const unreachable = goal.band === 'improbable' || goal.band === 'inalcanzable'
+
+  const system = [
+    'Sos asesor financiero especializado en CEDEARs argentinos.',
+    'Estás armando el plan de una META puntual del usuario, no de toda la cartera.',
+    '',
+    'Reglas:',
+    '- Máximo 3 recomendaciones, solo con fundamento real.',
+    `- El horizonte de la meta es acotado: usá únicamente ${horizons.join(' o ')}.`,
+    '- En una compra, suggested_amount_ars NUNCA puede superar el efectivo disponible.',
+    '- Respetá los límites de concentración del usuario. Son los mismos que para el',
+    '  resto de la cartera: una meta no los suspende.',
+    '',
+    'REGLA INNEGOCIABLE SOBRE EL RIESGO:',
+    'Una meta exigente NO justifica recomendaciones más agresivas. Si el objetivo no',
+    'entra con una cartera razonable, decilo en el reasoning y recomendá lo que sí es',
+    'sensato para el plazo. NUNCA propongas concentrar en un solo activo, ni apostar a',
+    'un movimiento puntual, para "llegar" al número. El usuario dijo explícitamente que',
+    'no quiere descapitalizarse: perseguir un objetivo inalcanzable tomando más riesgo',
+    'es la forma más rápida de que eso pase.',
+    '',
+    unreachable
+      ? 'ESTA META ESTÁ FUERA DE ALCANCE con el capital y el plazo actuales. Tu trabajo NO es ' +
+        'encontrar la manera de lograrla: es proponer el mejor uso del dinero para ese plazo y ' +
+        'decir con todas las letras que el objetivo necesita más capital, más tiempo o un monto menor.'
+      : 'Esta meta es alcanzable con una cartera razonable para el plazo.',
+    '',
+    'En el reasoning incluí siempre qué te haría cambiar de opinión.',
+  ].join('\n')
+
+  const goalLines = [
+    `META: "${goal.name}"`,
+    goal.targetAmount ? `Objetivo: ${fmtArs(goal.targetAmount)}` : 'Sin objetivo de monto',
+    goal.targetDate ? `Fecha: ${goal.targetDate}${goal.daysLeft !== null ? ` (faltan ${goal.daysLeft} días)` : ''}` : 'Sin fecha',
+    `Valor actual de la meta: ${fmtArs(goal.currentValue)} (${fmtArs(goal.cashInGoal)} en efectivo sin invertir)`,
+    goal.requiredAnnualPct !== null
+      ? `Rendimiento anual que exige el objetivo: ${goal.requiredAnnualPct.toFixed(0)}% — dificultad ${goal.band}`
+      : 'Sin objetivo y fecha no hay rendimiento exigido',
+    goal.achievableAmount !== null
+      ? `A ritmo de mercado razonable, en la fecha llegaría a ${fmtArs(goal.achievableAmount)}`
+      : '',
+    '',
+    'YA APARTADO PARA ESTA META:',
+    goal.earmarked.map((h) => `${h.symbol}: ${h.quantity} unidades · ${fmtArs(h.value)}`).join('\n') ||
+      '(nada todavía)',
+  ]
+    .filter(Boolean)
+    .join('\n')
+
+  const positionLines = ctx.positions
+    .map(
+      (p) =>
+        `${p.symbol} (${p.sector}): ${fmtArs(p.value)} · ${p.weight.toFixed(1)}% · P/L ${p.gainPct.toFixed(1)}%`,
+    )
+    .join('\n')
+
+  const user = [
+    goalLines,
+    '',
+    `CARTERA COMPLETA — total ${fmtArs(ctx.totalValue)}, efectivo disponible ${fmtArs(ctx.availableCash)}`,
+    positionLines || '(sin posiciones)',
+    '',
+    `CONCENTRACIÓN POR SECTOR: ${ctx.sectorWeights.map((s) => `${s.sector} ${s.pct.toFixed(0)}%`).join(' · ')}`,
+    `LÍMITES DEL USUARIO: máx ${ctx.settings.rebalance_pct}% por activo, máx ${ctx.settings.sector_concentration_pct}% por sector`,
+    '',
+    'ACTIVOS QUE PODÉS SUGERIR:',
+    ctx.universe.map((u) => `${u.symbol} — ${u.name} (${u.sector})`).join('\n'),
+  ].join('\n')
+
+  // Se reusa el schema del asesor general, acotando el enum de horizonte
+  const schema = advisorSchema(ctx.universe.map((u) => u.symbol)) as {
+    properties: { recommendations: { items: { properties: Record<string, unknown> } } }
+  }
+  schema.properties.recommendations.items.properties.time_horizon = {
+    type: 'string',
+    enum: horizons,
+  }
+
+  const response = await client.messages.create({
+    model: OPPORTUNITY_MODEL,
+    max_tokens: 8000,
+    output_config: { effort: 'medium', format: { type: 'json_schema', schema } },
+    system,
+    messages: [{ role: 'user', content: user }],
+  })
+
+  const usage = { input: response.usage.input_tokens, output: response.usage.output_tokens }
+
+  if (response.stop_reason === 'refusal' || response.stop_reason === 'max_tokens') {
+    console.warn(`[claude] asesor de meta: stop_reason=${response.stop_reason}`)
+    return { recommendations: [], usage }
+  }
+
+  const text = response.content.find((b) => b.type === 'text')
+  if (!text || text.type !== 'text') return { recommendations: [], usage }
+
+  const parsed = JSON.parse(text.text) as { recommendations: Recommendation[] }
+  console.log(`[claude] meta "${goal.name}" · in ${usage.input} / out ${usage.output} tokens`)
+
+  return { recommendations: (parsed.recommendations ?? []).slice(0, 3), usage }
+}
+
 export type Opportunity = {
   symbol: string
   opportunity_type: 'pullback' | 'momentum' | 'undervalued' | 'sector_rotation' | 'earnings_play'

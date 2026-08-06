@@ -37,6 +37,7 @@ export function useGoals() {
       description?: string | null
       target_date?: string | null
       target_amount?: number | null
+      cash_ars?: number | null
       emoji?: string
     }) => {
       if (!session) return { error: 'sin sesión' }
@@ -57,6 +58,7 @@ export function useGoals() {
         description?: string | null
         target_date?: string | null
         target_amount?: number | null
+        cash_ars?: number | null
         emoji?: string
       },
     ) => {

@@ -1,4 +1,4 @@
-# IOL Portfolio Monitor
+# Inverse Pulse
 
 PWA de monitoreo de cartera con alertas automáticas. Spec completa en [docs/CLAUDE.md](docs/CLAUDE.md).
 

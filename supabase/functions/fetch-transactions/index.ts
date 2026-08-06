@@ -45,6 +45,23 @@ const LOOKBACK_DAYS = 120
  */
 const CASH_NOISE_THRESHOLD = 5000
 
+/**
+ * Los errores de PostgREST no son instancias de Error: son objetos planos con
+ * `message`, `details` y `hint`. Pasarlos por String() los convierte en
+ * "[object Object]" y esconde justo el dato que sirve.
+ */
+function describe(err: unknown): string {
+  if (err instanceof Error) return err.message
+  if (err && typeof err === 'object') {
+    const e = err as { message?: string; details?: string; hint?: string; code?: string }
+    if (e.message) {
+      return [e.message, e.details, e.hint, e.code && `(${e.code})`].filter(Boolean).join(' · ')
+    }
+    return JSON.stringify(err)
+  }
+  return String(err)
+}
+
 function daysAgo(n: number): string {
   return new Date(Date.now() - n * 86_400_000).toISOString().slice(0, 10)
 }
@@ -216,7 +233,7 @@ Deno.serve(async (req) => {
     try {
       results[user.id] = await syncUser(user.id)
     } catch (err) {
-      const message = err instanceof Error ? err.message : String(err)
+      const message = describe(err)
       results[user.id] = { error: message }
       console.error(`[fetch-transactions] ${user.id}:`, message)
     }
