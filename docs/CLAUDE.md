@@ -58,6 +58,7 @@ No es solo un visor de cartera — es un **asistente de inversión automatizado*
 ## Design System
 
 ### Filosofía visual
+
 Dashboard financiero oscuro, denso en información pero legible. Inspirado en terminales de trading profesionales pero con la claridad de una app consumer. La información más importante se ve sin scroll. Cada número tiene un color que indica si es bueno (verde), malo (rojo), o neutral.
 
 ### Paleta de colores
@@ -65,10 +66,10 @@ Dashboard financiero oscuro, denso en información pero legible. Inspirado en te
 ```css
 :root {
   /* Backgrounds */
-  --bg-primary: #06060A;        /* Fondo principal — casi negro con tinte azul */
-  --bg-surface: #0E0E14;        /* Cards y contenedores */
-  --bg-elevated: #161620;       /* Elementos elevados, modals */
-  --bg-hover: #1C1C28;          /* Hover states */
+  --bg-primary: #06060a; /* Fondo principal — casi negro con tinte azul */
+  --bg-surface: #0e0e14; /* Cards y contenedores */
+  --bg-elevated: #161620; /* Elementos elevados, modals */
+  --bg-hover: #1c1c28; /* Hover states */
 
   /* Borders */
   --border-subtle: rgba(255, 255, 255, 0.05);
@@ -76,21 +77,21 @@ Dashboard financiero oscuro, denso en información pero legible. Inspirado en te
   --border-strong: rgba(255, 255, 255, 0.12);
 
   /* Text */
-  --text-primary: #EEEEF4;      /* Texto principal */
-  --text-secondary: #8888A0;    /* Labels, descripciones */
-  --text-muted: #555568;        /* Texto terciario */
+  --text-primary: #eeeef4; /* Texto principal */
+  --text-secondary: #8888a0; /* Labels, descripciones */
+  --text-muted: #555568; /* Texto terciario */
 
   /* Semantic */
-  --gain: #00E68A;              /* Verde ganancia — eléctrico, inequívoco */
-  --loss: #FF4757;              /* Rojo pérdida — urgente */
-  --warning: #FFB020;           /* Amarillo alerta */
-  --info: #4DA6FF;              /* Azul informativo */
-  --accent: #8B5CF6;            /* Violeta accent — CTAs, highlights */
+  --gain: #00e68a; /* Verde ganancia — eléctrico, inequívoco */
+  --loss: #ff4757; /* Rojo pérdida — urgente */
+  --warning: #ffb020; /* Amarillo alerta */
+  --info: #4da6ff; /* Azul informativo */
+  --accent: #8b5cf6; /* Violeta accent — CTAs, highlights */
 
   /* Gradients */
-  --gradient-gain: linear-gradient(135deg, #00E68A 0%, #00B368 100%);
-  --gradient-loss: linear-gradient(135deg, #FF4757 0%, #CC3A47 100%);
-  --gradient-accent: linear-gradient(135deg, #8B5CF6 0%, #6D3AE8 100%);
+  --gradient-gain: linear-gradient(135deg, #00e68a 0%, #00b368 100%);
+  --gradient-loss: linear-gradient(135deg, #ff4757 0%, #cc3a47 100%);
+  --gradient-accent: linear-gradient(135deg, #8b5cf6 0%, #6d3ae8 100%);
 
   /* Glow effects (para números importantes) */
   --glow-gain: 0 0 20px rgba(0, 230, 138, 0.15);
@@ -102,18 +103,18 @@ Dashboard financiero oscuro, denso en información pero legible. Inspirado en te
 
 ```css
 /* Display — para el total de cartera y números grandes */
-@import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&display=swap');
+@import url("https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&display=swap");
 
 /* Body — para texto general */
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600&display=swap');
+@import url("https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600&display=swap");
 
 /* Mono — para precios, porcentajes, datos financieros */
-@import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&display=swap');
+@import url("https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&display=swap");
 
 :root {
-  --font-display: 'Space Grotesk', sans-serif;
-  --font-body: 'Inter', sans-serif;
-  --font-mono: 'JetBrains Mono', monospace;
+  --font-display: "Space Grotesk", sans-serif;
+  --font-body: "Inter", sans-serif;
+  --font-mono: "JetBrains Mono", monospace;
 }
 ```
 
@@ -409,6 +410,7 @@ CREATE POLICY "Authenticated read earnings" ON earnings_calendar FOR SELECT USIN
 ## Pantallas y Layout
 
 ### Bottom Navigation (5 tabs)
+
 ```
 [ 📊 Dashboard ] [ 🔔 Alertas ] [ 🚀 Oportunidades ] [ 📰 Noticias ] [ ⚙️ Config ]
 ```
@@ -515,6 +517,7 @@ Al tocar un tag de temática: filtra las noticias por ese tema.
 ## Edge Functions (CRON Jobs)
 
 ### 1. fetch-portfolio (cada 5 min, lun-vie 10:00-18:00)
+
 ```
 1. Llamar a IOL API → get_portfolio + get_balance
 2. Actualizar tabla `positions` con precios actuales
@@ -524,6 +527,7 @@ Al tocar un tag de temática: filtra las noticias por ese tema.
 ```
 
 ### 2. evaluate-alerts (trigger: después de fetch-portfolio)
+
 ```
 Para cada posición del usuario:
   1. Calcular P/L vs avg_buy_price
@@ -545,6 +549,7 @@ Para cada posición del usuario:
 ```
 
 ### 3. fetch-news (cada 30 min)
+
 ```
 1. Fetch RSS de: Ámbito, Cronista, La Nación Economía, Reuters, Bloomberg, CNBC
 2. Filtrar por keywords de `world_topics`
@@ -561,6 +566,7 @@ Para cada posición del usuario:
 ```
 
 ### 4. analyze-opportunities (cada 1 hora)
+
 ```
 1. Obtener últimas 20 noticias + precios actuales de CEDEARs populares
 2. Obtener posiciones actuales del usuario
@@ -576,6 +582,7 @@ Para cada posición del usuario:
 ```
 
 ### 5. fetch-dollar-rates (cada 10 min, lun-vie 10:00-18:00)
+
 ```
 1. Fetch cotizaciones MEP, CCL, Blue, Oficial
 2. Insertar en `dollar_rates`
@@ -583,6 +590,7 @@ Para cada posición del usuario:
 ```
 
 ### 6. earnings-reminder (diaria a las 9:00 AM)
+
 ```
 1. Consultar `earnings_calendar` para próximos 3 días
 2. Si algún activo en cartera del usuario reporta:
@@ -594,6 +602,7 @@ Para cada posición del usuario:
 ## Prompts para Claude API
 
 ### Prompt de análisis de noticias
+
 ```
 Eres un analista financiero especializado en mercados globales y su impacto
 en CEDEARs argentinos. Analiza la siguiente noticia y respondé SOLO con
@@ -613,6 +622,7 @@ Noticia:
 ```
 
 ### Prompt de oportunidades de inversión
+
 ```
 Eres un analista financiero experto con perfil moderado-agresivo, especializado
 en CEDEARs argentinos y mercados globales. Tu objetivo es detectar oportunidades
@@ -654,47 +664,50 @@ Prioriza:
 ## PWA y Push Notifications
 
 ### Service Worker (sw.js)
+
 ```javascript
 // Escuchar push events
-self.addEventListener('push', (event) => {
+self.addEventListener("push", (event) => {
   const data = event.data.json();
 
   const options = {
     body: data.body,
-    icon: '/icons/icon-192x192.png',
-    badge: '/icons/badge-72x72.png',
-    tag: data.tag || 'default',
+    icon: "/icons/icon-192x192.png",
+    badge: "/icons/badge-72x72.png",
+    tag: data.tag || "default",
     renotify: true,
-    vibrate: data.severity === 'critical' ? [300, 100, 300, 100, 300] : [200, 100, 200],
+    vibrate:
+      data.severity === "critical"
+        ? [300, 100, 300, 100, 300]
+        : [200, 100, 200],
     data: {
-      url: data.url || '/',
-      alertId: data.alertId
+      url: data.url || "/",
+      alertId: data.alertId,
     },
     actions: [
-      { action: 'open', title: 'Ver detalle' },
-      { action: 'dismiss', title: 'Descartar' }
-    ]
+      { action: "open", title: "Ver detalle" },
+      { action: "dismiss", title: "Descartar" },
+    ],
   };
 
-  event.waitUntil(
-    self.registration.showNotification(data.title, options)
-  );
+  event.waitUntil(self.registration.showNotification(data.title, options));
 });
 
 // Click en notificación
-self.addEventListener('notificationclick', (event) => {
+self.addEventListener("notificationclick", (event) => {
   event.notification.close();
-  if (event.action === 'open' || !event.action) {
+  if (event.action === "open" || !event.action) {
     event.waitUntil(clients.openWindow(event.notification.data.url));
   }
 });
 ```
 
 ### Manifest (manifest.json)
+
 ```json
 {
   "name": "IOL Portfolio Monitor",
-  "short_name": "IOL Monitor",
+  "short_name": "Inverse Pulse",
   "description": "Monitor inteligente de inversiones con alertas automáticas",
   "start_url": "/",
   "display": "standalone",
@@ -704,12 +717,36 @@ self.addEventListener('notificationclick', (event) => {
   "icons": [
     { "src": "/icons/icon-72x72.png", "sizes": "72x72", "type": "image/png" },
     { "src": "/icons/icon-96x96.png", "sizes": "96x96", "type": "image/png" },
-    { "src": "/icons/icon-128x128.png", "sizes": "128x128", "type": "image/png" },
-    { "src": "/icons/icon-144x144.png", "sizes": "144x144", "type": "image/png" },
-    { "src": "/icons/icon-152x152.png", "sizes": "152x152", "type": "image/png" },
-    { "src": "/icons/icon-192x192.png", "sizes": "192x192", "type": "image/png" },
-    { "src": "/icons/icon-384x384.png", "sizes": "384x384", "type": "image/png" },
-    { "src": "/icons/icon-512x512.png", "sizes": "512x512", "type": "image/png" }
+    {
+      "src": "/icons/icon-128x128.png",
+      "sizes": "128x128",
+      "type": "image/png"
+    },
+    {
+      "src": "/icons/icon-144x144.png",
+      "sizes": "144x144",
+      "type": "image/png"
+    },
+    {
+      "src": "/icons/icon-152x152.png",
+      "sizes": "152x152",
+      "type": "image/png"
+    },
+    {
+      "src": "/icons/icon-192x192.png",
+      "sizes": "192x192",
+      "type": "image/png"
+    },
+    {
+      "src": "/icons/icon-384x384.png",
+      "sizes": "384x384",
+      "type": "image/png"
+    },
+    {
+      "src": "/icons/icon-512x512.png",
+      "sizes": "512x512",
+      "type": "image/png"
+    }
   ]
 }
 ```
@@ -719,6 +756,7 @@ self.addEventListener('notificationclick', (event) => {
 ## Roadmap de desarrollo
 
 ### Fase 1 — Fundación (3-4 días)
+
 - [ ] Init proyecto: Vite + React + TypeScript + Tailwind
 - [ ] Configurar Supabase: crear proyecto, ejecutar schema SQL
 - [ ] Setup PWA: vite-plugin-pwa, manifest, service worker básico
@@ -726,6 +764,7 @@ self.addEventListener('notificationclick', (event) => {
 - [ ] Layout base: bottom nav, dark theme, tipografía
 
 ### Fase 2 — Dashboard (3-4 días)
+
 - [ ] Integración IOL API: fetch portfolio y balance
 - [ ] MetricCards: total, ganancia, pérdida, cash
 - [ ] Tabla de posiciones con sparklines (Recharts)
@@ -734,6 +773,7 @@ self.addEventListener('notificationclick', (event) => {
 - [ ] Cotización dólar inline
 
 ### Fase 3 — Motor de alertas (2-3 días)
+
 - [ ] Implementar evaluate-alerts en Edge Function
 - [ ] Crear alert_rules por defecto al registrar usuario
 - [ ] Push notifications con Web Push API + VAPID
@@ -741,6 +781,7 @@ self.addEventListener('notificationclick', (event) => {
 - [ ] Badge counter en bottom nav
 
 ### Fase 4 — Noticias y AI (3-4 días)
+
 - [ ] RSS fetcher Edge Function
 - [ ] Integración Claude API para análisis de noticias
 - [ ] Feed de noticias con filtros por tags
@@ -748,12 +789,14 @@ self.addEventListener('notificationclick', (event) => {
 - [ ] Alertas por noticias negativas sobre activos en cartera
 
 ### Fase 5 — Oportunidades (2-3 días)
+
 - [ ] Edge Function analyze-opportunities con Claude API
 - [ ] Cards de oportunidades con growth estimate
 - [ ] Earnings calendar y reminders
 - [ ] Sugerencia de compra cuando oportunidad es de alta confianza
 
 ### Fase 6 — Pulido y deploy (2-3 días)
+
 - [ ] Gráfico de evolución de cartera (portfolio_snapshots)
 - [ ] Pantalla de configuración (editar umbrales, toggles)
 - [ ] Historial de operaciones

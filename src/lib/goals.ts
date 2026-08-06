@@ -17,21 +17,68 @@
  * o menos objetivo.
  */
 
-/** Referencia histórica: retorno nominal anual de largo plazo de las acciones americanas. */
-export const HISTORICAL_RATE = 10
-
 /**
- * Techo de la tasa de referencia cuando pasa a usar el rendimiento medido.
+ * Los tres escenarios con los que se proyecta una meta.
  *
- * Sin techo, un trimestre con suerte anualiza a tres dígitos y pinta de verde
- * una meta imposible — justo lo que el semáforo tiene que evitar. Sostener más
- * de 25% anual durante años es territorio de un puñado de nombres célebres, no
- * un supuesto de planificación.
+ * ── Por qué tres y no uno ────────────────────────────────────────────────
+ *
+ * Una tasa única es el instrumento equivocado. Si se elige conservadora,
+ * subestima lo que puede pasar en un buen año. Si se elige optimista, pinta de
+ * verde metas que no van a llegar, y el costo de ese error es asimétrico: no
+ * tenés la plata el día que la necesitabas.
+ *
+ * El escenario malo se muestra SIEMPRE. Para una meta con fecha es el que más
+ * importa: es el que dice cuánto podrías no tener el día del cumpleaños.
+ *
+ * ── De dónde salen los números ───────────────────────────────────────────
+ *
+ * Del historial real de los índices, no de una estimación:
+ *
+ * · Agresivo — Nasdaq-100 desde 2000, que es lo más parecido a una cartera
+ *   concentrada en CEDEARs tech. Peor año 2008 (−41,9%) y 2022 (−33%); mejor
+ *   año 2023 (+54,9%); promedio anual del período +12,2%.
+ *
+ * · Moderado — S&P 500: peor año 2008 (−37%), mejor cerca de +30%, promedio
+ *   de largo plazo ~10%.
+ *
+ * El perfil agresivo NO es solo un techo más alto: también tiene un piso más
+ * bajo. Esa es la contracara real de buscar retornos altos, y esconderla sería
+ * vender una ilusión.
  */
-export const RATE_CAP = 25
+export type RiskProfile = 'agresivo' | 'moderado'
 
-/** Días de historia antes de confiar en el rendimiento medido en vez del histórico. */
-export const RATE_MIN_HISTORY_DAYS = 180
+export type ScenarioSet = {
+  bad: number
+  mid: number
+  good: number
+  profile: RiskProfile
+  source: string
+}
+
+const PROFILES: Record<RiskProfile, ScenarioSet> = {
+  agresivo: {
+    bad: -35,
+    mid: 12,
+    good: 50,
+    profile: 'agresivo',
+    source:
+      'Rango del Nasdaq-100 desde 2000: su peor año fue −41,9% (2008), el mejor +54,9% (2023) ' +
+      'y el promedio anual +12,2%.',
+  },
+  moderado: {
+    bad: -20,
+    mid: 10,
+    good: 30,
+    profile: 'moderado',
+    source:
+      'Rango del S&P 500: peor año −37% (2008), mejores años cerca de +30%, promedio de largo ' +
+      'plazo ~10%.',
+  },
+}
+
+export function scenarios(profile: RiskProfile = 'agresivo'): ScenarioSet {
+  return PROFILES[profile] ?? PROFILES.agresivo
+}
 
 export type DifficultyBand = 'comodo' | 'exigente' | 'dificil' | 'improbable' | 'inalcanzable'
 
@@ -93,6 +140,39 @@ export function difficultyBand(requiredAnnualPct: number): DifficultyBand {
   return 'inalcanzable'
 }
 
+/**
+ * Cuánto crece el capital en `days` según el escenario.
+ *
+ * ── Por qué no se compone la tasa anual y listo ──────────────────────────
+ *
+ * Porque los extremos de UN año no se repiten todos los años. Componer −35%
+ * anual durante 10 años da que $200.000 se convierten en $2.693, y eso nunca
+ * pasó: el peor decenio del Nasdaq-100 (2000-2010) fue −6,3% anual, no −35%.
+ *
+ * Y al revés en el corto plazo: aplicar −35% anual a 51 días da apenas −5,8%,
+ * cuando en marzo de 2020 el índice cayó cerca de 28% en cinco semanas. La
+ * tasa plana subestimaba el riesgo corto y exageraba el largo.
+ *
+ * La dispersión de los rendimientos escala con la RAÍZ del tiempo, no con el
+ * tiempo. Se trabaja en logaritmos para que el escenario malo nunca pueda dar
+ * menos de −100%, y la calibración reproduce los dos extremos históricos
+ * verificados: el peor año (−35%) y el peor decenio (≈ −6% anual).
+ */
+export function scenarioGrowth(set: ScenarioSet, which: 'bad' | 'mid' | 'good', days: number): number {
+  const years = days / 365
+  const midLog = Math.log(1 + set.mid / 100)
+
+  if (which === 'mid') return Math.exp(midLog * years)
+
+  const targetLog = Math.log(1 + set[which] / 100)
+  // Distancia al escenario medio, medida a un año
+  const devLog = Math.abs(targetLog - midLog)
+  // Raíz del tiempo: a 10 años la dispersión anual es ~3,2 veces menor
+  const scaled = devLog * Math.sqrt(years)
+
+  return Math.exp(midLog * years + (which === 'good' ? scaled : -scaled))
+}
+
 export type Projections = {
   /** A cuánto llegás en la fecha, al ritmo de referencia */
   achievableAmount: number
@@ -113,12 +193,14 @@ export function projections(
   target: number | null,
   days: number | null,
   ratePct: number,
+  /** Crecimiento ya calculado. Si no viene, se compone la tasa anual. */
+  growthOverride?: number,
 ): Projections | null {
   if (days === null || days <= 0) return null
 
   const r = ratePct / 100
   const years = days / 365
-  const growth = Math.pow(1 + r, years)
+  const growth = growthOverride ?? Math.pow(1 + r, years)
 
   const achievableAmount = current * growth
   const capitalNeededToday = target && target > 0 ? target / growth : 0
@@ -138,75 +220,27 @@ export function projections(
   return { achievableAmount, capitalNeededToday, yearsToTarget, dateReached }
 }
 
-export type ReferenceRate = {
-  pct: number
-  source: 'historical' | 'measured'
-  /** Por qué se usa esta tasa, para mostrarlo en pantalla */
-  explanation: string
-}
-
-/**
- * La tasa con la que se proyecta.
- *
- * Arranca en el histórico y pasa al rendimiento medido de la cartera cuando hay
- * suficiente historia — así, si la cartera rinde 18% sostenido, las metas se
- * evalúan contra 18% y no contra un promedio ajeno.
- *
- * Acotada entre 0% y RATE_CAP: proyectar una racha buena hacia adelante es
- * proyectar suerte, y proyectar una mala haría inalcanzable cualquier meta.
- */
-export function referenceRate(
-  reviews: Array<{ period_start: string; period_end: string; return_pct: number | null }>,
-): ReferenceRate {
-  const usable = reviews.filter((r) => r.return_pct != null)
-
-  if (usable.length) {
-    const oldest = usable.reduce((min, r) => (r.period_start < min ? r.period_start : min),
-      usable[0].period_start)
-    const historyDays = daysUntil(oldest)
-    const span = historyDays === null ? 0 : -historyDays
-
-    if (span >= RATE_MIN_HISTORY_DAYS) {
-      // Se anualiza el promedio de los períodos medidos
-      const avg = usable.reduce((s, r) => s + (r.return_pct ?? 0), 0) / usable.length
-      const periodDays =
-        usable.reduce((s, r) => {
-          const d = daysUntil(r.period_start)
-          const e = daysUntil(r.period_end)
-          return s + (d !== null && e !== null ? e - d : 30)
-        }, 0) / usable.length
-
-      const annualized = (Math.pow(1 + avg / 100, 365 / Math.max(1, periodDays)) - 1) * 100
-      const capped = Math.min(RATE_CAP, Math.max(0, annualized))
-
-      return {
-        pct: capped,
-        source: 'measured',
-        explanation:
-          capped < annualized
-            ? `Tu cartera viene rindiendo más que ${RATE_CAP}% anual, pero las proyecciones usan ${RATE_CAP}% como techo: extrapolar una racha buena es extrapolar suerte.`
-            : `Proyectado con el ${capped.toFixed(1)}% anual que viene rindiendo tu cartera.`,
-      }
-    }
-  }
-
-  return {
-    pct: HISTORICAL_RATE,
-    source: 'historical',
-    explanation:
-      `Proyectado con ${HISTORICAL_RATE}% anual, el promedio histórico de largo plazo de las ` +
-      `acciones americanas. Cuando la app tenga 6 meses de historia medida, pasa a usar el ` +
-      `rendimiento real de tu cartera.`,
-  }
-}
-
 export type GoalAnalysis = {
+  /** Valor actual de la meta, para poder expresar los escenarios en % */
+  currentValue: number
   daysLeft: number | null
   required: number | null
   band: DifficultyBand | null
   progress: number | null
-  projections: Projections | null
-  rate: ReferenceRate
+  /** Una proyección por escenario. `mid` es la que se muestra como principal. */
+  bad: Projections | null
+  mid: Projections | null
+  good: Projections | null
+  set: ScenarioSet
+  /**
+   * La meta no entra ni en el mejor escenario.
+   *
+   * Es el criterio del veredicto: solo se marca fuera de alcance lo que no
+   * llega ni con un año excepcional. Es lo más generoso posible con la
+   * ambición del usuario, y hace que cuando la app diga que no, el no sea
+   * indiscutible.
+   */
+  outOfReach: boolean
   /** Objetivo cubierto: el valor actual ya alcanza o supera la meta */
   covered: boolean
 }
@@ -215,19 +249,30 @@ export type GoalAnalysis = {
 export function analyzeGoal(
   goal: { target_amount: number | null; target_date: string | null },
   currentValue: number,
-  rate: ReferenceRate,
+  set: ScenarioSet,
 ): GoalAnalysis {
   const target = goal.target_amount ? Number(goal.target_amount) : null
   const daysLeft = daysUntil(goal.target_date)
   const required = requiredReturn(currentValue, target, daysLeft)
 
+  // Los escenarios extremos escalan por raíz del tiempo; el medio se compone
+  // normal, que es lo que corresponde a un promedio
+  const grow = (which: 'bad' | 'mid' | 'good') =>
+    daysLeft === null ? undefined : scenarioGrowth(set, which, daysLeft)
+
+  const good = projections(currentValue, target, daysLeft, set.good, grow('good'))
+
   return {
+    currentValue,
     daysLeft,
     required,
     band: required === null ? null : difficultyBand(required),
     progress: target && target > 0 ? (currentValue / target) * 100 : null,
-    projections: projections(currentValue, target, daysLeft, rate.pct),
-    rate,
+    bad: projections(currentValue, target, daysLeft, set.bad, grow('bad')),
+    mid: projections(currentValue, target, daysLeft, set.mid, grow('mid')),
+    good,
+    set,
+    outOfReach: !!target && !!good && good.achievableAmount < target,
     covered: !!target && target > 0 && currentValue >= target,
   }
 }

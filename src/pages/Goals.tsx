@@ -9,8 +9,8 @@ import { usePortfolio } from '@/hooks/usePortfolio'
 import { supabase } from '@/lib/supabase'
 import { useAuth } from '@/lib/auth'
 import { formatARS, formatPct, toneOf, toneText } from '@/lib/format'
-import { analyzeGoal, referenceRate, type ReferenceRate } from '@/lib/goals'
-import type { Goal, PerformanceReview } from '@/lib/types'
+import { analyzeGoal, scenarios, type RiskProfile, type ScenarioSet } from '@/lib/goals'
+import type { Goal } from '@/lib/types'
 
 type GoalInput = {
   name: string
@@ -58,20 +58,23 @@ export function Goals() {
   const { session } = useAuth()
   const [creating, setCreating] = useState(false)
   const [expanded, setExpanded] = useState<string | null>(null)
-  const [reviews, setReviews] = useState<PerformanceReview[]>([])
+  const [profile, setProfile] = useState<RiskProfile>('agresivo')
 
-  // La tasa con la que se proyecta sale del rendimiento medido cuando hay
-  // historia suficiente; hasta entonces, del promedio histórico
+  // El rango de escenarios sale del perfil de riesgo elegido en Config
   useEffect(() => {
     if (!session) return
     void supabase
-      .from('performance_reviews')
-      .select('period_start, period_end, return_pct')
-      .eq('user_id', session.user.id)
-      .then(({ data }) => setReviews((data ?? []) as PerformanceReview[]))
+      .from('users')
+      .select('settings')
+      .eq('id', session.user.id)
+      .maybeSingle()
+      .then(({ data }) => {
+        const p = (data?.settings as Record<string, unknown>)?.risk_profile
+        if (p === 'moderado' || p === 'agresivo') setProfile(p)
+      })
   }, [session])
 
-  const rate: ReferenceRate = useMemo(() => referenceRate(reviews), [reviews])
+  const set: ScenarioSet = useMemo(() => scenarios(profile), [profile])
 
   const totalAssigned = useMemo(
     () => goals.reduce((s, g) => s + Number(g.current_value), 0),
@@ -131,7 +134,7 @@ export function Goals() {
             <GoalCard
               key={goal.id}
               goal={goal}
-              rate={rate}
+              set={set}
               holdings={holdings.filter((h) => h.goal_id === goal.id)}
               positions={positions}
               assignedBySymbol={assignedBySymbol}
@@ -152,7 +155,7 @@ export function Goals() {
         <Card>
           <SectionTitle>Nueva meta</SectionTitle>
           <GoalForm
-            rate={rate}
+            set={set}
             onCancel={() => setCreating(false)}
             onSubmit={async (input) => {
               const result = await createGoal(input)
@@ -176,7 +179,7 @@ export function Goals() {
 
 function GoalCard({
   goal,
-  rate,
+  set,
   holdings,
   positions,
   assignedBySymbol,
@@ -190,7 +193,7 @@ function GoalCard({
   onReload,
 }: {
   goal: Goal
-  rate: ReferenceRate
+  set: ScenarioSet
   holdings: Array<{ id: string; symbol: string; quantity: number }>
   positions: ReturnType<typeof usePortfolio>['positions']
   assignedBySymbol: Map<string, number>
@@ -216,7 +219,7 @@ function GoalCard({
   const progress = target && target > 0 ? Math.min(100, (value / target) * 100) : null
   const remaining = timeLeft(goal.target_date)
 
-  const analysis = useMemo(() => analyzeGoal(goal, value, rate), [goal, value, rate])
+  const analysis = useMemo(() => analyzeGoal(goal, value, set), [goal, value, set])
 
   const assignToGoal = useCallback(
     async (sym: string, qty: number) => {
@@ -246,7 +249,7 @@ function GoalCard({
         <SectionTitle>Editar meta</SectionTitle>
         <GoalForm
           initial={goal}
-          rate={rate}
+          set={set}
           onCancel={() => setEditing(false)}
           onSubmit={async (input) => {
             const result = await onUpdate(goal.id, input)
@@ -447,12 +450,12 @@ function GoalCard({
 /** Mismo formulario para crear y para editar: una sola forma de escribir una meta */
 function GoalForm({
   initial,
-  rate,
+  set,
   onCancel,
   onSubmit,
 }: {
   initial?: Goal
-  rate: ReferenceRate
+  set: ScenarioSet
   onCancel: () => void
   onSubmit: (input: GoalInput) => Promise<{ error: string | null }>
 }) {
@@ -475,9 +478,9 @@ function GoalForm({
     return analyzeGoal(
       { target_amount: Number(targetAmount), target_date: targetDate },
       current,
-      rate,
+      set,
     )
-  }, [initial, cash, targetAmount, targetDate, rate])
+  }, [initial, cash, targetAmount, targetDate, set])
 
   async function submit(e: FormEvent) {
     e.preventDefault()

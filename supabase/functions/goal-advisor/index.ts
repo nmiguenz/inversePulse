@@ -87,12 +87,18 @@ async function buildAdvisorContext(userId: string): Promise<AdvisorContext | nul
   const totalValue = rows.reduce((s, p) => s + (p.market_value || p.quantity * p.current_price), 0)
 
   const bySector = new Map<string, number>()
+  const byType = new Map<string, number>()
+  let sameDayFunds = 0
+
   for (const p of rows) {
     const v = p.market_value || p.quantity * p.current_price
     bySector.set(p.sector, (bySector.get(p.sector) ?? 0) + v)
+    byType.set(p.asset_type, (byType.get(p.asset_type) ?? 0) + v)
+    if (p.asset_type === 'FCI' && p.rescue_time === 'T+0') sameDayFunds += v
   }
 
   const settings = (user?.settings ?? {}) as Record<string, number>
+  const availableCash = balance?.available_to_trade_ars ?? balance?.available_ars ?? 0
 
   return {
     positions: rows.map((p) => {
@@ -110,7 +116,7 @@ async function buildAdvisorContext(userId: string): Promise<AdvisorContext | nul
     totalValue,
     // Lo operable, no el saldo: sugerir un monto que no se puede ejecutar hoy
     // es una recomendación inútil
-    availableCash: balance?.available_to_trade_ars ?? balance?.available_ars ?? 0,
+    availableCash,
     news: [],
     universe: universe.map((u) => ({
       symbol: u.symbol,
@@ -127,6 +133,14 @@ async function buildAdvisorContext(userId: string): Promise<AdvisorContext | nul
       sector,
       pct: totalValue > 0 ? (v / totalValue) * 100 : 0,
     })),
+    typeWeights: [...byType].map(([type, v]) => ({
+      type,
+      value: v,
+      pct: totalValue > 0 ? (v / totalValue) * 100 : 0,
+    })),
+    // Efectivo más lo que rescata en el día: es lo que financia las metas con
+    // fecha cercana, así que no se puede proponer tocarlo
+    liquidityFloor: availableCash + sameDayFunds,
   }
 }
 

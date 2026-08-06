@@ -26,7 +26,7 @@ export default defineConfig({
       },
       manifest: {
         name: "Inverse Pulse",
-        short_name: "IOL Monitor",
+        short_name: "Inverse Pulse",
         description:
           "Monitor inteligente de inversiones con alertas automáticas",
         start_url: "/",

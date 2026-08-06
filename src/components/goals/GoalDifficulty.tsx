@@ -26,17 +26,21 @@ export function DifficultyBadge({ band }: { band: DifficultyBand }) {
 }
 
 /**
- * Dificultad de la meta y, cuando no cierra, las tres salidas reales.
+ * Dificultad de la meta y las tres proyecciones.
  *
- * La app no bloquea una meta imposible: es plata del usuario. Pero decir "vas
- * 40%" sin decir que el objetivo pide 70.000% anual sería dejarlo caminar hacia
- * una apuesta. Y un semáforo en rojo a secas tampoco sirve — por eso van los
- * tres números que convierten el "no llegás" en algo que se puede decidir:
- * cuánta plata haría falta, para cuándo llegás, o qué monto sí es alcanzable.
+ * Se muestran los tres escenarios en vez de una sola tasa porque un número
+ * único siempre miente para algún lado: conservador subestima un buen año,
+ * optimista pinta de verde metas que no llegan. Y el escenario malo importa
+ * más que el bueno cuando la meta tiene fecha — es el que dice cuánto podrías
+ * NO tener el día que necesitás la plata.
+ *
+ * La app no bloquea una meta imposible: es plata del usuario. Pero cuando el
+ * objetivo no entra ni en el mejor escenario, lo dice, y ofrece las tres
+ * salidas reales.
  */
 export function GoalDifficulty({ analysis }: { analysis: GoalAnalysis }) {
   const [open, setOpen] = useState(false)
-  const { band, required, projections: p, rate, covered, daysLeft } = analysis
+  const { band, required, bad, mid, good, set, covered, daysLeft, outOfReach, currentValue } = analysis
 
   if (covered) {
     return (
@@ -54,8 +58,6 @@ export function GoalDifficulty({ analysis }: { analysis: GoalAnalysis }) {
   // Sin objetivo o sin fecha no hay dificultad que calcular, y no es un error:
   // una meta de "juntar lo que se pueda" es perfectamente válida
   if (band === null || required === null) return null
-
-  const hard = band === 'improbable' || band === 'inalcanzable'
 
   return (
     <div className="mt-3">
@@ -75,37 +77,63 @@ export function GoalDifficulty({ analysis }: { analysis: GoalAnalysis }) {
         <div className="border-subtle mt-3 border-t pt-3">
           <p className="text-secondary text-[12px] leading-relaxed">{BAND_HINT[band]}</p>
 
-          {hard && (
-            <p className="text-secondary mt-2 text-[12px] leading-relaxed">
-              Una meta así no se alcanza tomando más riesgo: se alcanza cambiando alguno de los
-              tres números de abajo. El asesor no va a proponerte concentrar para llegar.
+          {/* Las tres puntas. La mala va primero a propósito: para una meta con
+              fecha es la que decide si vas a tener la plata */}
+          {bad && mid && good && (
+            <div className="mt-3">
+              <p className="text-muted mb-2 text-[11px]">
+                A cuánto llegás en la fecha, según cómo venga el mercado
+              </p>
+              <div className="grid grid-cols-3 gap-2">
+                <Scenario
+                  label="Si va mal"
+                  amount={bad.achievableAmount}
+                  from={currentValue}
+                  tone="text-loss"
+                />
+                <Scenario
+                  label="Si va normal"
+                  amount={mid.achievableAmount}
+                  from={currentValue}
+                  tone="text-primary"
+                />
+                <Scenario
+                  label="Si va excelente"
+                  amount={good.achievableAmount}
+                  from={currentValue}
+                  tone="text-gain"
+                />
+              </div>
+            </div>
+          )}
+
+          {outOfReach && (
+            <p className="text-secondary mt-3 text-[12px] leading-relaxed">
+              El objetivo no entra <strong className="text-primary">ni en el mejor escenario</strong>
+              . No es cuestión de tomar más riesgo: es cuestión de cambiar alguno de los tres
+              números de abajo. El asesor no va a proponerte concentrar para llegar.
             </p>
           )}
 
-          {p && (
+          {mid && (
             <div className="mt-3 space-y-2.5">
-              <Exit
-                label="Con lo que tenés, llegás a"
-                value={formatARS(p.achievableAmount)}
-                hint="en la fecha que pusiste"
-              />
-              {p.capitalNeededToday > 0 && (
+              {mid.capitalNeededToday > 0 && (
                 <Exit
                   label="Para llegar al objetivo necesitarías"
-                  value={formatARS(p.capitalNeededToday)}
-                  hint="invertidos hoy"
+                  value={formatARS(mid.capitalNeededToday)}
+                  hint="invertidos hoy, a ritmo normal"
                 />
               )}
-              {p.dateReached && (
+              {mid.dateReached && (
                 <Exit
                   label="Con lo que tenés, el objetivo llega"
-                  value={new Date(`${p.dateReached}T12:00:00`).toLocaleDateString('es-AR', {
+                  value={new Date(`${mid.dateReached}T12:00:00`).toLocaleDateString('es-AR', {
                     month: 'long',
                     year: 'numeric',
                   })}
                   hint={
-                    p.yearsToTarget != null && p.yearsToTarget >= 1
-                      ? `en ${p.yearsToTarget.toFixed(1)} años`
+                    mid.yearsToTarget != null && mid.yearsToTarget >= 1
+                      ? `en ${mid.yearsToTarget.toFixed(1)} años`
                       : undefined
                   }
                 />
@@ -113,9 +141,38 @@ export function GoalDifficulty({ analysis }: { analysis: GoalAnalysis }) {
             </div>
           )}
 
-          <p className="text-muted mt-3 text-[11px] leading-relaxed">{rate.explanation}</p>
+          <p className="text-muted mt-3 text-[11px] leading-relaxed">{set.source}</p>
         </div>
       )}
+    </div>
+  )
+}
+
+/**
+ * Se muestra la variación del PERÍODO, no la tasa anual, porque es la que se
+ * aplica de verdad: los escenarios extremos escalan por raíz del tiempo, así
+ * que "−35% anual" no es el número que se usa para 51 días ni para 10 años.
+ */
+function Scenario({
+  label,
+  amount,
+  from,
+  tone,
+}: {
+  label: string
+  amount: number
+  from: number
+  tone: string
+}) {
+  const change = from > 0 ? (amount / from - 1) * 100 : 0
+  return (
+    <div className="bg-elevated rounded-xl px-2.5 py-2.5 text-center">
+      <p className="text-muted text-[10px] leading-tight">{label}</p>
+      <p className={`tnum mt-1 text-[13px] font-semibold ${tone}`}>{formatARS(amount)}</p>
+      <p className="text-muted tnum mt-0.5 text-[10px]">
+        {change > 0 ? '+' : ''}
+        {change.toFixed(0)}%
+      </p>
     </div>
   )
 }

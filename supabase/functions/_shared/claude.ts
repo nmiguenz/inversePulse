@@ -175,6 +175,20 @@ export type AdvisorContext = {
   universe: Array<{ symbol: string; name: string; sector: string; price: number | null }>
   settings: { rebalance_pct: number; sector_concentration_pct: number; take_profit_pct: number }
   sectorWeights: Array<{ sector: string; pct: number }>
+  /**
+   * Composición por tipo de instrumento. Sin esto el asesor no podía ver que
+   * hay 34% de la cartera en fondos comunes mientras el objetivo declarado es
+   * maximizar el crecimiento.
+   */
+  typeWeights?: Array<{ type: string; pct: number; value: number }>
+  /**
+   * Piso de liquidez que NO se puede tocar, en pesos.
+   *
+   * Los FCI T+0 son lo que hace que "si necesitás efectivo" funcione y lo que
+   * financia las metas con fecha cercana. Sin este límite, un asesor
+   * instruido para buscar crecimiento propondría vaciarlos.
+   */
+  liquidityFloor?: number
 }
 
 function advisorSchema(symbols: string[]) {
@@ -248,6 +262,18 @@ export async function advise(ctx: AdvisorContext): Promise<{
     '- En un rebalance indicá el counterpart_symbol: de dónde sale la plata.',
     '- Mirá la concentración: sugerir más de un sector que ya pesa de más empeora el riesgo.',
     '',
+    'ROTACIÓN DE RENTA FIJA A CRECIMIENTO:',
+    'El objetivo declarado del usuario es que la cartera crezca lo más posible, y reinvertir.',
+    'Mirá la composición por tipo de instrumento: si hay una porción grande en fondos comunes',
+    'o bonos rindiendo tasa, evaluá explícitamente rotar parte a CEDEARs y decilo con el',
+    'counterpart_symbol correspondiente. No lo propongas por reflejo — solo si el activo de',
+    'destino tiene una tesis concreta.',
+    '',
+    'PERO respetá el piso de liquidez que te paso. Esa plata NO se toca: es lo que permite',
+    'salir rápido si hace falta efectivo y lo que financia las metas con fecha cercana.',
+    'Quedarse sin liquidez obliga a vender en el peor momento, que es cómo se pierde plata',
+    'incluso teniendo razón sobre las empresas.',
+    '',
     'En el reasoning incluí siempre qué te haría cambiar de opinión. Una tesis sin',
     'condición de salida no es una tesis.',
   ].join('\n')
@@ -264,7 +290,13 @@ export async function advise(ctx: AdvisorContext): Promise<{
     positionLines || '(sin posiciones)',
     '',
     `CONCENTRACIÓN POR SECTOR: ${ctx.sectorWeights.map((s) => `${s.sector} ${s.pct.toFixed(0)}%`).join(' · ')}`,
-    `UMBRALES DEL USUARIO: máx ${ctx.settings.rebalance_pct}% por activo, máx ${ctx.settings.sector_concentration_pct}% por sector, toma de ganancia ${ctx.settings.take_profit_pct}%`,
+    ctx.typeWeights?.length
+      ? `COMPOSICIÓN POR TIPO: ${ctx.typeWeights.map((t) => `${t.type} ${t.pct.toFixed(0)}% (${fmtArs(t.value)})`).join(' · ')}`
+      : '',
+    ctx.liquidityFloor
+      ? `PISO DE LIQUIDEZ INTOCABLE: ${fmtArs(ctx.liquidityFloor)} entre efectivo y FCI T+0`
+      : '',
+    `UMBRALES DEL USUARIO: máx ${ctx.settings.rebalance_pct}% por activo, máx ${ctx.settings.sector_concentration_pct}% por sector`,
     '',
     'NOTICIAS RECIENTES:',
     ctx.news
@@ -275,7 +307,11 @@ export async function advise(ctx: AdvisorContext): Promise<{
     ctx.universe
       .map((u) => `${u.symbol} — ${u.name} (${u.sector})${u.price ? ` · ${fmtArs(u.price)}` : ''}`)
       .join('\n'),
-  ].join('\n')
+  ]
+    // Las líneas de composición y piso de liquidez son opcionales: sin filtrar
+    // quedarían renglones vacíos en el medio del prompt
+    .filter(Boolean)
+    .join('\n')
 
   const response = await client.messages.create({
     model: OPPORTUNITY_MODEL,

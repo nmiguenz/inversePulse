@@ -118,6 +118,21 @@ Deno.serve(async (req) => {
     const sectorTotals = new Map<string, number>()
     for (const p of positions) sectorTotals.set(p.sector, (sectorTotals.get(p.sector) ?? 0) + valueOf(p))
 
+    // Composición por tipo: es lo que le permite ver que hay una porción
+    // grande en fondos comunes mientras el objetivo es que la cartera crezca
+    const typeTotals = new Map<string, number>()
+    for (const p of positions) {
+      typeTotals.set(p.asset_type, (typeTotals.get(p.asset_type) ?? 0) + valueOf(p))
+    }
+
+    // El piso de liquidez: efectivo más lo que rescata en el día. Es lo que
+    // hace que "si necesitás efectivo" funcione y lo que financia las metas
+    // con fecha cercana, así que el asesor no puede proponer tocarlo.
+    const sameDayFunds = positions
+      .filter((p) => p.asset_type === 'FCI' && p.rescue_time === 'T+0')
+      .reduce((sum, p) => sum + valueOf(p), 0)
+    const liquidityFloor = availableCash + sameDayFunds
+
     let analysis
     try {
       analysis = await advise({
@@ -154,6 +169,12 @@ Deno.serve(async (req) => {
           sector,
           pct: totalValue > 0 ? (v / totalValue) * 100 : 0,
         })),
+        typeWeights: [...typeTotals.entries()].map(([type, v]) => ({
+          type,
+          value: v,
+          pct: totalValue > 0 ? (v / totalValue) * 100 : 0,
+        })),
+        liquidityFloor,
       })
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err)

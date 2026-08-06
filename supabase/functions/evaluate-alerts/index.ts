@@ -25,6 +25,9 @@ type Settings = {
   sector_concentration_pct: number
   daily_extreme_pct: number
   idle_cash_threshold: number
+  trailing_stop_pct: number
+  trailing_min_gain_pct: number
+  rebuy_watch_pct: number
   monitoring_start: string
   monitoring_end: string
   notify_decisions: boolean
@@ -44,6 +47,8 @@ type Position = {
   market_value: number | null
   gain_amount: number | null
   gain_pct: number | null
+  /** Máximo visto desde que se registra. Base del trailing stop. */
+  peak_price: number | null
 }
 
 type Candidate = {
@@ -86,14 +91,43 @@ function evaluate(positions: Position[], availableCash: number, s: Settings): Ca
     const dayPct = p.previous_close > 0 ? ((p.current_price - p.previous_close) / p.previous_close) * 100 : 0
     const weight = (value / total) * 100
 
-    if (gainPct >= s.take_profit_pct) {
+    // ── Trailing stop ──────────────────────────────────────────────────
+    // Reemplaza al umbral fijo de toma de ganancia. La diferencia que importa:
+    // un umbral fijo no distingue "subió 25% y sigue subiendo" de "subió 25% y
+    // se está dando vuelta". Este solo dispara en el segundo caso.
+    const peak = p.peak_price ?? 0
+    const drawdown = peak > 0 ? ((peak - p.current_price) / peak) * 100 : 0
+
+    if (
+      s.trailing_stop_pct > 0 &&
+      gainPct >= s.trailing_min_gain_pct &&
+      drawdown >= s.trailing_stop_pct
+    ) {
+      out.push({
+        alert_type: 'trailing_stop',
+        symbol: p.symbol,
+        title: `Vendé ${p.symbol} y tomá ganancias`,
+        message:
+          `${p.symbol} cedió ${drawdown.toFixed(1).replace('.', ',')}% desde su máximo de ` +
+          `${fmt(peak)}. Te llevás ${pct(gainPct)} (${fmt(gain)}).` +
+          (Math.abs(dayPct) >= s.daily_extreme_pct
+            ? ` Hoy solo cayó ${pct(dayPct)}.`
+            : ''),
+        severity: 'critical',
+        action_suggested: `Vender ${p.symbol}`,
+      })
+    }
+
+    // El umbral fijo queda como red opcional. En 0 no evalúa, que es el
+    // default desde que existe el trailing stop.
+    if (s.take_profit_pct > 0 && gainPct >= s.take_profit_pct) {
       out.push({
         alert_type: 'take_profit',
         symbol: p.symbol,
-        title: `Toma de ganancia — ${p.symbol}`,
-        message: `${p.symbol} acumula ${pct(gainPct)} (${fmt(gain)}). Superó tu umbral de ${s.take_profit_pct}%.`,
+        title: `Vendé ${p.symbol} y tomá ganancias`,
+        message: `${p.symbol} acumula ${pct(gainPct)} (${fmt(gain)}). Cruzó tu techo de ${s.take_profit_pct}%.`,
         severity: 'opportunity',
-        action_suggested: `Evaluar venta parcial de ${p.symbol}`,
+        action_suggested: `Vender ${p.symbol}`,
       })
     }
 
@@ -101,10 +135,10 @@ function evaluate(positions: Position[], availableCash: number, s: Settings): Ca
       out.push({
         alert_type: 'stop_loss',
         symbol: p.symbol,
-        title: `Stop loss — ${p.symbol}`,
+        title: `Cortá la pérdida en ${p.symbol}`,
         message: `${p.symbol} cae ${pct(gainPct)} (${fmt(gain)}). Cruzó tu piso de ${s.stop_loss_pct}%.`,
         severity: 'critical',
-        action_suggested: `Revisar posición en ${p.symbol}`,
+        action_suggested: `Vender ${p.symbol}`,
       })
     }
 
@@ -112,8 +146,10 @@ function evaluate(positions: Position[], availableCash: number, s: Settings): Ca
       out.push({
         alert_type: 'daily_extreme',
         symbol: p.symbol,
-        title: `Variación extrema — ${p.symbol}`,
-        message: `${p.symbol} se movió ${pct(dayPct)} en el día.`,
+        title: `${p.symbol} se movió ${pct(dayPct)} hoy`,
+        message:
+          `${p.symbol} ${dayPct > 0 ? 'subió' : 'cayó'} ${pct(dayPct)} en el día. ` +
+          `La posición acumula ${pct(gainPct)}.`,
         severity: 'warning',
         action_suggested: null,
       })
@@ -128,7 +164,7 @@ function evaluate(positions: Position[], availableCash: number, s: Settings): Ca
       out.push({
         alert_type: 'rebalance',
         symbol: p.symbol,
-        title: `Rebalanceo — ${p.symbol}`,
+        title: `Reducí ${p.symbol}: pesa demasiado`,
         message: `${p.symbol} pesa ${weight.toFixed(1)}% de la cartera (umbral ${s.rebalance_pct}%).`,
         severity: 'warning',
         action_suggested: toSell > 0 ? `Vender ${toSell} ${p.symbol}` : null,
@@ -146,7 +182,7 @@ function evaluate(positions: Position[], availableCash: number, s: Settings): Ca
       out.push({
         alert_type: 'sector_concentration',
         symbol: null,
-        title: `Concentración en ${sector}`,
+        title: `Diversificá fuera de ${sector}`,
         message: `${sector} representa ${share.toFixed(1)}% de la cartera (umbral ${s.sector_concentration_pct}%).`,
         severity: 'warning',
         action_suggested: `Diversificar fuera de ${sector}`,
@@ -158,10 +194,10 @@ function evaluate(positions: Position[], availableCash: number, s: Settings): Ca
     out.push({
       alert_type: 'idle_cash',
       symbol: null,
-      title: 'Cash sin invertir',
-      message: `Tenés ${fmt(availableCash)} sin rendir en la cuenta.`,
+      title: 'Poné a trabajar tu efectivo',
+      message: `Tenés ${fmt(availableCash)} parados en la cuenta, sin rendir nada.`,
       severity: 'info',
-      action_suggested: 'Suscribir a un FCI money market',
+      action_suggested: 'Suscribir a un FCI money market o comprar',
     })
   }
 
@@ -177,6 +213,73 @@ function evaluate(positions: Position[], availableCash: number, s: Settings): Ca
  */
 function shouldNotify(s: Settings): boolean {
   return s.notify_decisions !== false
+}
+
+// ============================================================
+// Recompra
+// ============================================================
+
+/**
+ * Avisa cuando algo que vendiste quedó más barato que tu precio de venta.
+ *
+ * IMPORTANTE, y es una decisión de diseño, no una limitación técnica: el aviso
+ * dice un HECHO —"está 12% abajo de lo que cobraste"— y nada más. No dice que
+ * va a subir, porque eso no lo sabe nadie. Una app que afirma con seguridad
+ * hacia dónde va un precio es peligrosa justamente porque suena confiable, y el
+ * juicio de si la tesis sigue en pie es del usuario.
+ */
+async function evaluateRebuys(userId: string, s: Settings) {
+  const threshold = s.rebuy_watch_pct ?? 10
+  if (threshold <= 0) return []
+
+  const { data: watch } = await db
+    .from('sell_watch')
+    .select('id, symbol, sold_price, sold_at')
+    .eq('user_id', userId)
+    .eq('is_active', true)
+    .is('alerted_at', null)
+
+  if (!watch?.length) return []
+
+  // El precio de hoy sale de las cotizaciones del universo, que cubren tanto
+  // lo que tenés como lo que no — que es justamente el caso acá
+  const { data: quotes } = await db
+    .from('market_quotes')
+    .select('symbol, price')
+    .in('symbol', watch.map((w) => w.symbol))
+
+  const priceBySymbol = new Map((quotes ?? []).map((q) => [q.symbol, q.price]))
+  const out: Array<Record<string, unknown>> = []
+
+  for (const w of watch) {
+    const price = priceBySymbol.get(w.symbol)
+    if (!price || !w.sold_price) continue
+
+    const drop = ((w.sold_price - price) / w.sold_price) * 100
+    if (drop < threshold) continue
+
+    const soldOn = new Date(w.sold_at).toLocaleDateString('es-AR', {
+      day: '2-digit',
+      month: '2-digit',
+    })
+
+    out.push({
+      alert_type: 'rebuy_watch',
+      symbol: w.symbol,
+      severity: 'opportunity',
+      title: `${w.symbol} está ${drop.toFixed(0)}% más barato que cuando vendiste`,
+      message:
+        `Lo vendiste a ${fmt(w.sold_price)} el ${soldOn} y hoy está a ${fmt(price)}. ` +
+        `Si tu tesis sobre la empresa sigue en pie, es una oportunidad de recomprar más barato. ` +
+        `Si vendiste porque la tesis se rompió, esto no cambia nada.`,
+      action_suggested: `Evaluar recompra de ${w.symbol}`,
+    })
+
+    // Una vez por venta: si no, avisaría todos los días mientras siga abajo
+    await db.from('sell_watch').update({ alerted_at: new Date().toISOString() }).eq('id', w.id)
+  }
+
+  return out
 }
 
 // ============================================================
@@ -354,7 +457,7 @@ async function evaluateUser(user: { id: string; settings: Settings; push_subscri
     db
       .from('positions')
       .select(
-        'symbol, description, quantity, avg_buy_price, current_price, previous_close, sector, market_value, gain_amount, gain_pct',
+        'symbol, description, quantity, avg_buy_price, current_price, previous_close, sector, market_value, gain_amount, gain_pct, peak_price',
       )
       .eq('user_id', user.id),
     db.from('account_balance').select('available_ars').eq('user_id', user.id).maybeSingle(),
@@ -381,6 +484,9 @@ async function evaluateUser(user: { id: string; settings: Settings; push_subscri
   // distintas según el tipo
   const fresh = [
     ...candidates.filter((c) => !seen.has(`${c.alert_type}|${c.symbol ?? ''}`)),
+    // La de recompra se marca en `sell_watch.alerted_at`, así que no necesita
+    // el dedupe de 24hs: avisa una sola vez por venta
+    ...(await evaluateRebuys(user.id, settings)),
     ...(await evaluateGoals(user.id)),
   ]
 

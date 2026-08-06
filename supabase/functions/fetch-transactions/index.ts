@@ -183,6 +183,29 @@ async function syncUser(userId: string) {
     if (error) throw error
   }
 
+  // ── Vigilancia de recompra ───────────────────────────────────────────
+  // Cada venta queda en observación: si después el precio cae por debajo de lo
+  // que cobraste, `evaluate-alerts` te lo dice. Solo el hecho — si va a volver
+  // a subir no lo sabe nadie.
+  const sells = rows.filter((r) => r.kind === 'sell' && r.symbol && r.price > 0)
+
+  if (sells.length) {
+    const { error } = await db.from('sell_watch').upsert(
+      sells.map((r) => ({
+        user_id: userId,
+        symbol: r.symbol,
+        sold_price: r.price,
+        sold_quantity: r.quantity,
+        sold_at: r.executed_at,
+        external_id: r.external_id,
+        is_active: true,
+      })),
+      { onConflict: 'user_id,external_id' },
+    )
+    // No es fatal: el historial ya quedó guardado, solo se pierde el aviso
+    if (error) console.error('[fetch-transactions] sell_watch:', describe(error))
+  }
+
   // ── Movimiento de dinero sin explicar ────────────────────────────────
   const residual = await detectUnexplainedCash(userId)
   let asked = false

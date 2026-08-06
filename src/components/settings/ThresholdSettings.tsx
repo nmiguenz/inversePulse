@@ -10,6 +10,10 @@ type Settings = {
   sector_concentration_pct: number
   daily_extreme_pct: number
   idle_cash_threshold: number
+  trailing_stop_pct: number
+  trailing_min_gain_pct: number
+  rebuy_watch_pct: number
+  risk_profile: 'agresivo' | 'moderado'
   monitoring_start: string
   monitoring_end: string
   notify_decisions: boolean
@@ -18,7 +22,7 @@ type Settings = {
 }
 
 type SliderDef = {
-  key: keyof Settings
+  key: Exclude<keyof Settings, 'risk_profile' | 'monitoring_start' | 'monitoring_end' | 'notify_decisions' | 'notify_opportunities' | 'notify_news'>
   label: string
   hint: string
   min: number
@@ -30,7 +34,42 @@ type SliderDef = {
 const pct = (v: number) => `${v > 0 ? '+' : ''}${v}%`
 
 const SLIDERS: SliderDef[] = [
-  { key: 'take_profit_pct', label: 'Toma de ganancia', hint: 'Avisa cuando una posición sube más de esto', min: 5, max: 100, step: 5, format: pct },
+  {
+    key: 'trailing_stop_pct',
+    label: 'Trailing stop',
+    hint: 'Avisa cuando una posición cede esto desde su máximo. Deja correr las que suben.',
+    min: 5,
+    max: 40,
+    step: 1,
+    format: (v) => `−${v}% del máximo`,
+  },
+  {
+    key: 'trailing_min_gain_pct',
+    label: 'Ganancia mínima para el trailing',
+    hint: 'Debajo de esto no aplica: esa zona es del stop loss',
+    min: 0,
+    max: 60,
+    step: 5,
+    format: (v) => `+${v}%`,
+  },
+  {
+    key: 'rebuy_watch_pct',
+    label: 'Aviso de recompra',
+    hint: 'Avisa si algo que vendiste queda esto más barato. No predice que vaya a subir.',
+    min: 0,
+    max: 40,
+    step: 5,
+    format: (v) => (v === 0 ? 'apagado' : `−${v}%`),
+  },
+  {
+    key: 'take_profit_pct',
+    label: 'Techo fijo de ganancia',
+    hint: 'Umbral duro, independiente del máximo. En 0 queda apagado: lo reemplaza el trailing stop.',
+    min: 0,
+    max: 200,
+    step: 10,
+    format: (v) => (v === 0 ? 'apagado' : `+${v}%`),
+  },
   { key: 'stop_loss_pct', label: 'Stop loss', hint: 'Avisa cuando una posición cae más de esto', min: -50, max: -5, step: 5, format: pct },
   { key: 'daily_extreme_pct', label: 'Variación extrema del día', hint: 'Movimiento diario que amerita mirar', min: 2, max: 20, step: 1, format: (v) => `±${v}%` },
   { key: 'rebalance_pct', label: 'Peso máximo por activo', hint: 'Arriba de esto sugiere rebalancear', min: 5, max: 50, step: 5, format: (v) => `${v}%` },
@@ -110,6 +149,42 @@ export function ThresholdSettings() {
 
   return (
     <div className="space-y-5">
+      {/* El perfil define el rango de escenarios con el que se proyectan las
+          metas. No cambia ninguna recomendación ni ningún umbral de venta. */}
+      <div>
+        <p className="text-[13px] font-medium">Perfil para proyectar metas</p>
+        <p className="text-muted mt-0.5 text-[11px] leading-relaxed">
+          Define con qué rango de rendimientos se estima si una meta es alcanzable. No toca las
+          recomendaciones ni los avisos de venta.
+        </p>
+        <div className="mt-2 grid grid-cols-2 gap-2">
+          {(
+            [
+              { key: 'agresivo', label: 'Agresivo', range: '−35% / +12% / +50%' },
+              { key: 'moderado', label: 'Moderado', range: '−20% / +10% / +30%' },
+            ] as const
+          ).map((p) => (
+            <button
+              key={p.key}
+              type="button"
+              onClick={() => void save({ ...settings, risk_profile: p.key })}
+              className={`rounded-xl border px-3 py-2.5 text-left transition-colors ${
+                (settings.risk_profile ?? 'agresivo') === p.key
+                  ? 'border-accent bg-accent-soft'
+                  : 'border-line'
+              }`}
+            >
+              <span className="text-primary block text-[13px] font-medium">{p.label}</span>
+              <span className="text-muted tnum block text-[11px]">{p.range}</span>
+            </button>
+          ))}
+        </div>
+        <p className="text-muted mt-2 text-[11px] leading-relaxed">
+          El agresivo no es solo un techo más alto: también tiene un piso más bajo. Es el rango
+          real del Nasdaq-100 desde 2000, peores años incluidos.
+        </p>
+      </div>
+
       {SLIDERS.map((slider) => {
         const value = Number(settings[slider.key])
         return (
