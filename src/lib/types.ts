@@ -11,6 +11,10 @@ export type Position = {
   asset_type: string
   currency: string
   rescue_time: string | null
+  /** Unidades reservadas por órdenes puestas */
+  committed_quantity: number | null
+  /** variacionDiaria de IOL, tal cual */
+  daily_change_pct: number | null
   /** Valuación en ARS según IOL. Los bonos cotizan por 100 nominales, así que
    *  quantity * current_price NO sirve como valor de mercado. */
   market_value: number | null

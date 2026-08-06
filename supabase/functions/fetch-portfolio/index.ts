@@ -56,8 +56,14 @@ async function syncUser(userId: string) {
       symbol: a.titulo.simbolo,
       description: meta?.display_name ?? a.titulo.descripcion,
       quantity: a.cantidad,
+      // Unidades reservadas por órdenes puestas: quantity menos esto es lo que
+      // realmente podés vender hoy
+      committed_quantity: a.comprometido ?? 0,
       avg_buy_price: a.ppc,
       current_price: a.ultimoPrecio,
+      // La variación diaria se guarda tal como la manda IOL. previous_close se
+      // sigue guardando como respaldo para las filas viejas.
+      daily_change_pct: a.variacionDiaria ?? 0,
       previous_close: previousClose(a),
       // Valuación y P/L los calcula IOL. No recalcular con quantity * precio:
       // los bonos cotizan por 100 nominales y el resultado sale 100x.

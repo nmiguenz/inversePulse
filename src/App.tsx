@@ -11,6 +11,7 @@ import { News } from '@/pages/News'
 import { Settings } from '@/pages/Settings'
 import { History } from '@/pages/History'
 import { Goals } from '@/pages/Goals'
+import { AssetDetail } from '@/pages/AssetDetail'
 import { Login } from '@/pages/Login'
 
 function Gate() {
@@ -38,6 +39,7 @@ function Gate() {
             <Route path="config" element={<Settings />} />
             <Route path="historial" element={<History />} />
             <Route path="metas" element={<Goals />} />
+            <Route path="activo/:symbol" element={<AssetDetail />} />
             <Route path="*" element={<Navigate to="/" replace />} />
           </Route>
         </Routes>

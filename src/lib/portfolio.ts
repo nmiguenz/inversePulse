@@ -25,7 +25,11 @@ export function withMetrics(positions: Position[]): PositionMetrics[] {
       return {
         ...p,
         value,
-        dayPct: p.previous_close > 0 ? ((p.current_price - p.previous_close) / p.previous_close) * 100 : 0,
+        // La variación diaria viene de IOL. El cálculo sobre previous_close
+        // queda de respaldo para filas sincronizadas antes de la 0013.
+        dayPct:
+          p.daily_change_pct ??
+          (p.previous_close > 0 ? ((p.current_price - p.previous_close) / p.previous_close) * 100 : 0),
         gain: p.gain_amount ?? value - cost,
         gainPct: p.gain_pct ?? (cost > 0 ? ((value - cost) / cost) * 100 : 0),
         weight: total > 0 ? (value / total) * 100 : 0,
@@ -36,6 +40,49 @@ export function withMetrics(positions: Position[]): PositionMetrics[] {
 
 export function totalValue(positions: PositionMetrics[]): number {
   return positions.reduce((sum, p) => sum + p.value, 0)
+}
+
+/** Etiquetas de los filtros, con el mismo vocabulario que usa IOL */
+export const ASSET_TYPE_LABEL: Record<string, string> = {
+  CEDEAR: 'CEDEARs',
+  BONO: 'Bonos',
+  FCI: 'Fondos comunes',
+  ACCION: 'Acciones',
+}
+
+export type TypeSlice = { type: string; label: string; value: number; pct: number; count: number }
+
+/**
+ * Composición por tipo de instrumento. Alimenta los chips de filtro: cada uno
+ * muestra cuánto pesa, así se elige sabiendo qué hay adentro.
+ */
+export function typeBreakdown(positions: PositionMetrics[]): TypeSlice[] {
+  const total = totalValue(positions)
+  const byType = new Map<string, { value: number; count: number }>()
+
+  for (const p of positions) {
+    const entry = byType.get(p.asset_type) ?? { value: 0, count: 0 }
+    entry.value += p.value
+    entry.count += 1
+    byType.set(p.asset_type, entry)
+  }
+
+  return [...byType.entries()]
+    .map(([type, { value, count }]) => ({
+      type,
+      label: ASSET_TYPE_LABEL[type] ?? type,
+      value,
+      count,
+      pct: total > 0 ? (value / total) * 100 : 0,
+    }))
+    .sort((a, b) => b.value - a.value)
+}
+
+/** Ganancia acumulada del conjunto que se le pase (sirve filtrado o completo) */
+export function totalGain(positions: PositionMetrics[]): { amount: number; pct: number } {
+  const amount = positions.reduce((sum, p) => sum + p.gain, 0)
+  const cost = positions.reduce((sum, p) => sum + (p.value - p.gain), 0)
+  return { amount, pct: cost > 0 ? (amount / cost) * 100 : 0 }
 }
 
 /**

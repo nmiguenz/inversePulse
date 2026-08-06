@@ -9,12 +9,14 @@ import { PositionRow } from '@/components/dashboard/PositionRow'
 import { DollarStrip } from '@/components/dashboard/DollarStrip'
 import { NextAction } from '@/components/dashboard/NextAction'
 import { CashCard } from '@/components/dashboard/CashCard'
+import { TypeFilter } from '@/components/dashboard/TypeFilter'
+import { useCurrency } from '@/lib/currency'
 import { usePortfolio } from '@/hooks/usePortfolio'
 import { usePullToRefresh } from '@/hooks/usePullToRefresh'
 import { PullIndicator } from '@/components/ui/PullIndicator'
 import { AssetLogo } from '@/components/ui/AssetLogo'
 import { IconChevronRight } from '@/components/ui/Icon'
-import { dayChange, sectorBreakdown, sellRanking, totalValue, worstPosition } from '@/lib/portfolio'
+import { dayChange, sectorBreakdown, sellRanking, totalGain, totalValue, typeBreakdown, worstPosition } from '@/lib/portfolio'
 import { formatARS, formatCompactARS, formatPct, formatSignedARS, toneOf, toneText } from '@/lib/format'
 import { RESCUE_LABEL } from '@/lib/sectors'
 
@@ -33,21 +35,40 @@ const topics = [
 
 export function Dashboard() {
   const navigate = useNavigate()
-  const { positions, balance, latestRates, historyBySymbol, snapshots, iolStatus, loading, error, reload } =
+  const { positions, balance, latestRates, snapshots, iolStatus, loading, error, reload } =
     usePortfolio()
 
   const { pull, refreshing, ready } = usePullToRefresh(reload)
   const [showAllSell, setShowAllSell] = useState(false)
+  const [typeFilter, setTypeFilter] = useState<string | null>(null)
+  const { format, currency, setCurrency, canSwitch, mep } = useCurrency()
 
+  // El total y la variación del día siempre son de la cartera COMPLETA: filtrar
+  // no puede hacerte perder de vista cuánto tenés. Lo que se filtra es el donut
+  // y la lista, igual que en IOL.
   const derived = useMemo(
     () => ({
       total: totalValue(positions),
       day: dayChange(positions),
-      sectors: sectorBreakdown(positions),
+      types: typeBreakdown(positions),
       sellOrder: sellRanking(positions),
       worst: worstPosition(positions),
     }),
     [positions],
+  )
+
+  const filtered = useMemo(
+    () => (typeFilter ? positions.filter((p) => p.asset_type === typeFilter) : positions),
+    [positions, typeFilter],
+  )
+
+  const filteredView = useMemo(
+    () => ({
+      total: totalValue(filtered),
+      gain: totalGain(filtered),
+      sectors: sectorBreakdown(filtered),
+    }),
+    [filtered],
   )
 
   const advisable = derived.sellOrder.filter((p) => p.advisable)
@@ -80,7 +101,7 @@ export function Dashboard() {
   }
 
   const dayTone = toneOf(derived.day.amount)
-  const totalGain = balance?.total_gain_loss ?? positions.reduce((s, p) => s + p.gain, 0)
+  const accumulatedGain = balance?.total_gain_loss ?? positions.reduce((s, p) => s + p.gain, 0)
 
   return (
     <div className="animate-fade-up space-y-4">
@@ -94,13 +115,33 @@ export function Dashboard() {
 
       {/* Total de cartera — el número grande manda, todo lo demás lo acompaña */}
       <Card className="py-7 text-center">
-        <p className="text-secondary text-[13px]">Total en tu cartera</p>
+        <div className="flex items-center justify-center gap-2">
+          <p className="text-secondary text-[13px]">Total en tu cartera</p>
+          {canSwitch && (
+            <button
+              type="button"
+              onClick={() => setCurrency(currency === 'ARS' ? 'USD' : 'ARS')}
+              className="border-line bg-elevated text-secondary rounded-full border px-2.5 py-0.5 text-[11px] font-medium"
+            >
+              {currency === 'ARS' ? 'ARS' : 'MEP'}
+            </button>
+          )}
+        </div>
         <p className="font-display tnum text-primary mt-2 text-[38px] leading-none font-bold">
-          {formatARS(derived.total)}
+          {format(derived.total)}
         </p>
         <p className={`tnum mt-2.5 text-[14px] font-medium ${toneText[dayTone]}`}>
-          {formatSignedARS(derived.day.amount)} · {formatPct(derived.day.pct)} hoy
+          {format(derived.day.amount)} · {formatPct(derived.day.pct)} hoy
         </p>
+
+        {/* IOL convierte cada CEDEAR con su MEP implícito, nosotros con el MEP
+            de mercado. Los números difieren ~1%, así que se aclara de dónde
+            sale en vez de dejar que parezca un error. */}
+        {currency === 'USD' && mep && (
+          <p className="text-muted mt-2 text-[11px]">
+            al MEP de mercado ({formatARS(mep)}) · IOL usa el implícito de cada activo
+          </p>
+        )}
       </Card>
 
       {/* Lo que conviene hacer, antes que cualquier métrica */}
@@ -110,9 +151,9 @@ export function Dashboard() {
       <div className="grid grid-cols-2 gap-3">
         <MetricCard
           label="Ganancia"
-          value={formatSignedARS(totalGain)}
+          value={formatSignedARS(accumulatedGain)}
           subLabel="total acumulada"
-          tone={totalGain}
+          tone={accumulatedGain}
         />
         <MetricCard
           label="Peor posición"
@@ -149,11 +190,33 @@ export function Dashboard() {
         </Card>
       </div>
 
-      {/* Composición por sector */}
+      {/* Composición. El filtro afecta al donut y a la lista, nunca al total
+          de arriba: filtrar no puede hacerte perder de vista lo que tenés. */}
       <div>
-        <SectionTitle icon="🧩">Composición por sector</SectionTitle>
-        <Card>
-          <SectorDonut slices={derived.sectors} />
+        <SectionTitle icon="🧩">Composición</SectionTitle>
+
+        <TypeFilter
+          types={derived.types}
+          active={typeFilter}
+          onChange={setTypeFilter}
+          total={derived.total}
+        />
+
+        <Card className="mt-3">
+          <div className="mb-3 text-center">
+            <p className="text-secondary text-[12px]">
+              {typeFilter
+                ? (derived.types.find((t) => t.type === typeFilter)?.label ?? typeFilter)
+                : 'Total tenencias'}
+            </p>
+            <p className="font-display tnum text-primary mt-1 text-[22px] leading-none font-bold">
+              {format(filteredView.total)}
+            </p>
+            <p className={`tnum mt-1.5 text-[12px] ${toneText[toneOf(filteredView.gain.amount)]}`}>
+              {format(filteredView.gain.amount)} · {formatPct(filteredView.gain.pct)}
+            </p>
+          </div>
+          <SectorDonut slices={filteredView.sectors} />
         </Card>
       </div>
 
@@ -217,22 +280,23 @@ export function Dashboard() {
         )}
       </div>
 
-      {/* Posiciones */}
+      {/* Posiciones — mismas columnas que la app de IOL. Respeta el filtro. */}
       <div>
-        <SectionTitle icon="📈">Posiciones</SectionTitle>
+        <SectionTitle icon="📈">
+          {typeFilter
+            ? (derived.types.find((t) => t.type === typeFilter)?.label ?? 'Posiciones')
+            : 'Posiciones'}
+        </SectionTitle>
         <Card className="p-0">
-          <div className="text-muted border-subtle grid grid-cols-[1fr_auto_auto] gap-3 border-b px-4 py-2.5 text-[11px]">
-            <span>Activo</span>
-            <span className="w-16 text-center">30 días</span>
-            <span className="w-[68px] text-right">Día · P/L</span>
+          <div className="text-muted border-subtle flex items-center gap-3 border-b px-5 py-2.5 text-[11px]">
+            <span className="flex-1">Símbolo</span>
+            <span className="w-[68px] text-right">Var. diaria</span>
+            <span className="w-[68px] text-right">Rendimiento</span>
+            <span className="w-[86px] text-right">Valorizado</span>
           </div>
           <ul>
-            {positions.map((p) => (
-              <PositionRow
-                key={p.id}
-                position={p}
-                history={historyBySymbol.get(p.symbol) ?? []}
-              />
+            {filtered.map((p) => (
+              <PositionRow key={p.id} position={p} />
             ))}
           </ul>
         </Card>

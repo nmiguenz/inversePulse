@@ -2,6 +2,8 @@ import { Outlet, useLocation } from 'react-router-dom'
 import { BottomNav } from './BottomNav'
 import { TopBar } from './TopBar'
 import { useAlerts } from '@/hooks/useAlerts'
+import { usePortfolio } from '@/hooks/usePortfolio'
+import { CurrencyProvider } from '@/lib/currency'
 
 const titles: Record<string, { title: string; subtitle?: string }> = {
   '/': { title: 'IOL Portfolio Monitor', subtitle: 'Cartera en vivo' },
@@ -15,25 +17,36 @@ const titles: Record<string, { title: string; subtitle?: string }> = {
 
 export function AppShell() {
   const { pathname } = useLocation()
-  const meta = titles[pathname] ?? { title: 'IOL Portfolio Monitor' }
+  // Las rutas con parámetro no están en el mapa: se arma el título del símbolo
+  const asset = pathname.match(/^\/activo\/(.+)$/)
+  const meta = asset
+    ? { title: decodeURIComponent(asset[1]).toUpperCase(), subtitle: 'Detalle del activo' }
+    : (titles[pathname] ?? { title: 'IOL Portfolio Monitor' })
 
   const { unreadCount: alertCount } = useAlerts()
+  const { latestRates } = usePortfolio()
+
+  // La cotización MEP viene del mismo sync que el resto. Si todavía no hay,
+  // CurrencyProvider deshabilita el toggle en vez de inventar un tipo de cambio.
+  const mep = latestRates.get('mep')?.sell_price ?? null
 
   return (
-    <div className="bg-base min-h-dvh">
-      <TopBar title={meta.title} subtitle={meta.subtitle} alertCount={alertCount} />
+    <CurrencyProvider mep={mep}>
+      <div className="bg-base min-h-dvh">
+        <TopBar title={meta.title} subtitle={meta.subtitle} alertCount={alertCount} />
 
-      <main
-        className="mx-auto max-w-lg px-4"
-        style={{
-          paddingTop: 'calc(var(--topbar-h) + env(safe-area-inset-top) + 12px)',
-          paddingBottom: 'calc(var(--bottomnav-h) + env(safe-area-inset-bottom) + 16px)',
-        }}
-      >
-        <Outlet />
-      </main>
+        <main
+          className="mx-auto max-w-lg px-4"
+          style={{
+            paddingTop: 'calc(var(--topbar-h) + env(safe-area-inset-top) + 12px)',
+            paddingBottom: 'calc(var(--bottomnav-h) + env(safe-area-inset-bottom) + 16px)',
+          }}
+        >
+          <Outlet />
+        </main>
 
-      <BottomNav alertCount={alertCount} />
-    </div>
+        <BottomNav alertCount={alertCount} />
+      </div>
+    </CurrencyProvider>
   )
 }
