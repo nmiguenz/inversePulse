@@ -120,11 +120,19 @@ async function syncUser(userId: string) {
   // `liquidacion` las traduce el frontend, así una etiqueta nueva de IOL no
   // rompe nada acá.
   const saldos = cuentaArs?.saldos ?? []
-  // Lo que realmente se puede usar para operar. Si IOL no manda el desglose,
-  // se cae al `disponible` plano en vez de dejarlo en cero.
-  const availableToTrade = saldos.length
-    ? saldos.reduce((sum, s) => sum + (s.disponibleOperar ?? 0), 0)
-    : (cuentaArs?.disponible ?? 0)
+
+  // `disponibleOperar` NO es aditivo: cada fila repite el mismo saldo operable
+  // visto desde su plazo ("si operás a 24h, podés usar esto"). Sumarlo lo
+  // multiplicaba por la cantidad de plazos — con datos reales daba $22.074
+  // cuando lo operable eran $5.518.
+  //
+  // El que vale es el del plazo inmediato; si no viene, el mayor de todos.
+  const immediate = saldos.find((s) => s.liquidacion?.toLowerCase().includes('inmediat'))
+  const availableToTrade = immediate
+    ? immediate.disponibleOperar
+    : saldos.length
+      ? Math.max(...saldos.map((s) => s.disponibleOperar ?? 0))
+      : (cuentaArs?.disponible ?? 0)
 
   const balance = {
     user_id: userId,

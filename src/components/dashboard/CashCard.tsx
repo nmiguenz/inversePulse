@@ -5,9 +5,10 @@ import type { AccountBalance } from '@/lib/types'
 /**
  * Traducción de los plazos de liquidación de IOL.
  *
- * La documentación solo confirma "Inmediato"; el resto se mapea por lo que se
- * ve en datos reales, normalizando para tolerar variantes de escritura. Si
- * aparece una etiqueta desconocida se muestra tal cual en vez de esconderla.
+ * Valores reales que devuelve la API, verificados con datos de la cuenta:
+ * "inmediato", "hrs24", "hrs48", "hrs72", "masHrs72". Se normaliza para
+ * tolerar variantes de escritura, y una etiqueta desconocida se muestra tal
+ * cual en vez de esconderse.
  */
 function settlementLabel(raw: string): { label: string; hint: string } {
   const key = raw.toLowerCase().replace(/[\s_-]/g, '')
@@ -15,11 +16,17 @@ function settlementLabel(raw: string): { label: string; hint: string } {
   if (key.includes('inmediat')) {
     return { label: 'Disponible hoy', hint: 'Podés usarlo ahora mismo' }
   }
+  if (key.includes('mashrs72')) {
+    return { label: 'A más de 72 h', hint: 'De una venta con liquidación extendida' }
+  }
   if (key.includes('24')) {
     return { label: 'Se acredita en 24 h', hint: 'De una venta que todavía no liquidó' }
   }
   if (key.includes('48')) {
     return { label: 'Se acredita en 48 h', hint: 'De una venta que todavía no liquidó' }
+  }
+  if (key.includes('72')) {
+    return { label: 'Se acredita en 72 h', hint: 'De una venta que todavía no liquidó' }
   }
   return { label: raw, hint: 'Plazo informado por IOL' }
 }
@@ -30,7 +37,11 @@ export function CashCard({ balance }: { balance: AccountBalance | null }) {
   const available = balance?.available_ars ?? 0
   const toTrade = balance?.available_to_trade_ars
   const committed = balance?.committed_ars ?? 0
-  const breakdown = balance?.settlement_breakdown ?? []
+  // IOL manda una fila por cada plazo aunque no haya nada en ese plazo: con la
+  // cuenta real, 4 de las 5 vienen en cero. Se muestran solo las que tienen algo.
+  const breakdown = (balance?.settlement_breakdown ?? []).filter(
+    (row) => (row.saldo ?? 0) !== 0 || (row.disponible ?? 0) !== 0 || (row.comprometido ?? 0) !== 0,
+  )
 
   // Solo tiene sentido desplegar si hay algo que contar
   const hasDetail = breakdown.length > 0 || committed > 0
