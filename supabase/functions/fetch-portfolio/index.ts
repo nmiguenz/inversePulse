@@ -54,7 +54,12 @@ async function syncUser(userId: string) {
     return {
       user_id: userId,
       symbol: a.titulo.simbolo,
-      description: meta?.display_name ?? a.titulo.descripcion,
+      // La descripción de IOL manda. `display_name` solo entra si IOL no
+      // manda nada: hasta la 0017 el orden estaba al revés y un nombre
+      // curado a mano —sacado de un mockup— le ganaba al nombre real del
+      // fondo. Así fue como un fondo de commodities se mostró durante
+      // semanas como "Pellegrini Money Market".
+      description: a.titulo.descripcion || meta?.display_name,
       quantity: a.cantidad,
       // Unidades reservadas por órdenes puestas: quantity menos esto es lo que
       // realmente podés vender hoy

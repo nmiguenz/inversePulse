@@ -83,6 +83,14 @@ async function buildAdvisorContext(userId: string): Promise<AdvisorContext | nul
 
   if (!universe?.length) return null
 
+  // Money market de verdad. En su propia consulta porque `universe` filtra por
+  // `suggestable` y los FCI están en false.
+  const { data: cashFunds } = await db
+    .from('asset_metadata')
+    .select('symbol')
+    .eq('is_cash_equivalent', true)
+  const cashEquivalents = new Set((cashFunds ?? []).map((u) => u.symbol))
+
   const rows = positions ?? []
   const totalValue = rows.reduce((s, p) => s + (p.market_value || p.quantity * p.current_price), 0)
 
@@ -94,7 +102,7 @@ async function buildAdvisorContext(userId: string): Promise<AdvisorContext | nul
     const v = p.market_value || p.quantity * p.current_price
     bySector.set(p.sector, (bySector.get(p.sector) ?? 0) + v)
     byType.set(p.asset_type, (byType.get(p.asset_type) ?? 0) + v)
-    if (p.asset_type === 'FCI' && p.rescue_time === 'T+0') sameDayFunds += v
+    if (cashEquivalents.has(p.symbol)) sameDayFunds += v
   }
 
   const settings = (user?.settings ?? {}) as Record<string, number>

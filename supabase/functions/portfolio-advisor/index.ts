@@ -77,7 +77,9 @@ Deno.serve(async (req) => {
       await Promise.all([
         db
           .from('positions')
-          .select('symbol, sector, quantity, current_price, previous_close, market_value, gain_pct')
+          .select(
+            'symbol, sector, asset_type, rescue_time, quantity, current_price, previous_close, market_value, gain_pct',
+          )
           .eq('user_id', user.id),
         db.from('account_balance').select('available_ars, available_to_trade_ars').eq('user_id', user.id).maybeSingle(),
         db
@@ -128,8 +130,20 @@ Deno.serve(async (req) => {
     // El piso de liquidez: efectivo más lo que rescata en el día. Es lo que
     // hace que "si necesitás efectivo" funcione y lo que financia las metas
     // con fecha cercana, así que el asesor no puede proponer tocarlo.
+    // Solo money market de verdad. El plazo de rescate NO alcanza: PCOMAGB
+    // rescata T+0 y es un fondo de commodities, con +15,85% acumulado — eso
+    // no es caja, es un activo de riesgo que además se puede vender rápido.
+    //
+    // Va en su propia consulta porque `universe` filtra por `suggestable`, y
+    // los FCI están en false: leerlo de ahí daría un conjunto vacío.
+    const { data: cashFunds } = await db
+      .from('asset_metadata')
+      .select('symbol')
+      .eq('is_cash_equivalent', true)
+
+    const cashEquivalents = new Set((cashFunds ?? []).map((u) => u.symbol))
     const sameDayFunds = positions
-      .filter((p) => p.asset_type === 'FCI' && p.rescue_time === 'T+0')
+      .filter((p) => cashEquivalents.has(p.symbol))
       .reduce((sum, p) => sum + valueOf(p), 0)
     const liquidityFloor = availableCash + sameDayFunds
 

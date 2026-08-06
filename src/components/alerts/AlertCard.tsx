@@ -1,6 +1,7 @@
 import { useRef, useState, type TouchEvent } from 'react'
 import type { Alert } from '@/lib/types'
 import { AlertBadge } from '@/components/ui/Badge'
+import { IdleCashOptions } from '@/components/alerts/IdleCashOptions'
 import { formatRelativeTime } from '@/lib/format'
 
 const SEVERITY_LABEL: Record<Alert['severity'], string> = {
@@ -30,6 +31,7 @@ export function AlertCard({
 }) {
   const [offset, setOffset] = useState(0)
   const [leaving, setLeaving] = useState(false)
+  const [showOptions, setShowOptions] = useState(false)
   const startX = useRef(0)
 
   function onTouchStart(e: TouchEvent) {
@@ -94,6 +96,24 @@ export function AlertCard({
           )}
           {!alert.is_read && <span className="bg-accent ml-auto h-2 w-2 rounded-full" aria-label="sin leer" />}
         </footer>
+
+        {alert.alert_type === 'idle_cash' && (
+          <>
+            <button
+              type="button"
+              onClick={(e) => {
+                // Sin esto, el click también marca la alerta como leída y
+                // dispara el handler del artículo
+                e.stopPropagation()
+                setShowOptions((v) => !v)
+              }}
+              className="border-accent text-accent active:bg-hover mt-3 w-full rounded-xl border py-2 text-[12px] font-medium"
+            >
+              {showOptions ? 'Ocultar opciones' : '¿En qué lo pongo?'}
+            </button>
+            {showOptions && <IdleCashOptions />}
+          </>
+        )}
       </article>
     </li>
   )
