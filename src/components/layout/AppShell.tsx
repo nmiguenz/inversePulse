@@ -10,6 +10,7 @@ const titles: Record<string, { title: string; subtitle?: string }> = {
   '/noticias': { title: 'Noticias', subtitle: 'Mercados y temáticas' },
   '/config': { title: 'Configuración', subtitle: 'Umbrales y notificaciones' },
   '/historial': { title: 'Historial', subtitle: 'Operaciones registradas' },
+  '/metas': { title: 'Metas', subtitle: 'Tu cartera por objetivo' },
 }
 
 export function AppShell() {

@@ -37,6 +37,16 @@ Deno.serve(async (req) => {
     return Response.json({ error: 'Falta el secret ANTHROPIC_API_KEY' }, { status: 500 })
   }
 
+  // Chequeo barato ANTES de gastar: si la tabla destino no existe, la llamada a
+  // Opus se paga igual y el resultado se tira. Ya pasó una vez.
+  const { error: schemaError } = await db.from('recommendations').select('id').limit(1)
+  if (schemaError) {
+    return Response.json(
+      { error: `No se puede escribir en recommendations: ${schemaError.message}. ¿Corriste 0009_advisor.sql?` },
+      { status: 500 },
+    )
+  }
+
   const force = new URL(req.url).searchParams.get('force') === 'true'
   const { data: users } = await db.from('users').select('id, settings, push_subscription')
   const results: Record<string, unknown> = {}

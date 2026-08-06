@@ -11,6 +11,7 @@ import { usePortfolio } from '@/hooks/usePortfolio'
 import { usePullToRefresh } from '@/hooks/usePullToRefresh'
 import { PullIndicator } from '@/components/ui/PullIndicator'
 import { AssetLogo } from '@/components/ui/AssetLogo'
+import { IconChevronRight } from '@/components/ui/Icon'
 import { dayChange, sectorBreakdown, sellRanking, totalValue, worstPosition } from '@/lib/portfolio'
 import { formatARS, formatCompactARS, formatPct, formatSignedARS, toneOf, toneText } from '@/lib/format'
 import { RESCUE_LABEL } from '@/lib/sectors'
@@ -120,6 +121,24 @@ export function Dashboard() {
         value={formatARS(balance?.available_ars ?? 0, true)}
         subLabel={balance?.committed_ars ? `${formatARS(balance.committed_ars)} comprometido` : 'sin rendir'}
       />
+
+      {/* Metas: apartar parte de lo que ya tenés para un objetivo */}
+      <button
+        type="button"
+        onClick={() => navigate('/metas')}
+        className="card flex w-full items-center gap-3 px-5 py-4 text-left"
+      >
+        <span className="text-[20px]" aria-hidden>
+          🎯
+        </span>
+        <span className="flex-1">
+          <span className="text-primary block text-[14px] font-semibold">Metas de ahorro</span>
+          <span className="text-muted block text-[12px]">
+            Apartá parte de tu cartera para un objetivo
+          </span>
+        </span>
+        <IconChevronRight className="text-muted shrink-0" />
+      </button>
 
       {/* Evolución de la cartera */}
       <div>

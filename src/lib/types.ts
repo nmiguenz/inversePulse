@@ -42,6 +42,28 @@ export type PricePoint = {
   recorded_at: string
 }
 
+export type Goal = {
+  id: string
+  name: string
+  description: string | null
+  emoji: string | null
+  target_date: string | null
+  target_amount: number | null
+  current_value: number
+  cost_basis: number
+  holdings_count: number
+  /** Vendiste y quedaste por debajo de lo que tenías apartado */
+  over_allocated: boolean | null
+  created_at: string
+}
+
+export type GoalHolding = {
+  id: string
+  goal_id: string
+  symbol: string
+  quantity: number
+}
+
 export type RecommendationAction = 'buy' | 'add' | 'trim' | 'sell' | 'rebalance' | 'hold'
 
 export type Recommendation = {
