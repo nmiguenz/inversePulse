@@ -22,6 +22,7 @@
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
 import { adviseForGoal, type AdvisorContext, type GoalContext } from '../_shared/claude.ts'
 import { isServiceRole, userIdFromJwt } from '../_shared/auth.ts'
+import { getUserApiKey, markApiKeyUsed } from '../_shared/apiKey.ts'
 import { jsonWithCors, preflight } from '../_shared/cors.ts'
 
 const db = createClient(
@@ -154,7 +155,7 @@ async function buildAdvisorContext(userId: string): Promise<AdvisorContext | nul
   }
 }
 
-async function planGoal(userId: string, goalId: string, ctx: AdvisorContext) {
+async function planGoal(userId: string, goalId: string, ctx: AdvisorContext, apiKey: string) {
   const { data: goal } = await db
     .from('goal_summary')
     .select('*')
@@ -198,7 +199,8 @@ async function planGoal(userId: string, goalId: string, ctx: AdvisorContext) {
     })),
   }
 
-  const { recommendations, usage } = await adviseForGoal(ctx, goalCtx)
+  const { recommendations, usage } = await adviseForGoal(apiKey, ctx, goalCtx)
+  await markApiKeyUsed(db, userId)
   if (!recommendations.length) return { recommendations: 0, usage }
 
   // El plan anterior deja de estar vigente: si no, se apilan sugerencias de
@@ -277,11 +279,21 @@ Deno.serve(async (req) => {
       }
     }
 
+    // Sin key propia no hay plan. La meta y sus escenarios siguen andando: lo
+    // único que necesita IA es la sugerencia de qué comprar.
+    const apiKey = await getUserApiKey(db, userId)
+    if (!apiKey) {
+      return jsonWithCors(
+        { error: 'Cargá tu API key de Anthropic en Configuración para generar el plan.' },
+        { status: 400 },
+      )
+    }
+
     const ctx = await buildAdvisorContext(userId)
     if (!ctx) return jsonWithCors({ error: 'universo de activos vacío' }, { status: 400 })
 
     try {
-      const result = await planGoal(userId, body.goal_id, ctx)
+      const result = await planGoal(userId, body.goal_id, ctx, apiKey)
       return jsonWithCors({ ok: true, ...result })
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err)
@@ -295,6 +307,12 @@ Deno.serve(async (req) => {
   const results: Record<string, unknown> = {}
 
   for (const user of users ?? []) {
+    const apiKey = await getUserApiKey(db, user.id)
+    if (!apiKey) {
+      results[user.id] = { skipped: 'sin API key de Anthropic configurada' }
+      continue
+    }
+
     const ctx = await buildAdvisorContext(user.id)
     if (!ctx) continue
 
@@ -309,7 +327,7 @@ Deno.serve(async (req) => {
     const perGoal: Record<string, unknown> = {}
     for (const goal of goals ?? []) {
       try {
-        perGoal[goal.name] = await planGoal(user.id, goal.id, ctx)
+        perGoal[goal.name] = await planGoal(user.id, goal.id, ctx, apiKey)
       } catch (err) {
         perGoal[goal.name] = { error: err instanceof Error ? err.message : String(err) }
       }

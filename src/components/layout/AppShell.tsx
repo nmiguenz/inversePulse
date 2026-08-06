@@ -1,5 +1,6 @@
 import { Outlet, useLocation } from "react-router-dom";
 import { BottomNav } from "./BottomNav";
+import { Sidebar } from "./Sidebar";
 import { ScrollToTop } from "./ScrollToTop";
 import { TopBar } from "./TopBar";
 import { useAlerts } from "@/hooks/useAlerts";
@@ -40,7 +41,8 @@ export function AppShell() {
 
   return (
     <CurrencyProvider mep={mep}>
-      <div className="bg-base min-h-dvh">
+      <div className="bg-base min-h-dvh lg:pl-56">
+        <Sidebar alertCount={alertCount} />
         <ScrollToTop />
         <TopBar
           title={meta.title}
@@ -49,7 +51,7 @@ export function AppShell() {
         />
 
         <main
-          className="mx-auto max-w-lg px-4"
+          className="mx-auto max-w-lg px-4 lg:max-w-6xl lg:px-8"
           style={{
             paddingTop:
               "calc(var(--topbar-h) + env(safe-area-inset-top) + 12px)",

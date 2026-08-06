@@ -5,6 +5,8 @@ import { IconChevronRight } from '@/components/ui/Icon'
 import { useAuth } from '@/lib/auth'
 import { currentSubscription, pushSupported, subscribeToPush, unsubscribeFromPush } from '@/lib/push'
 import { EarningsManager } from '@/components/settings/EarningsManager'
+import { BrokerConnection } from '@/components/settings/BrokerConnection'
+import { ApiKeySettings } from '@/components/settings/ApiKeySettings'
 import { ThresholdSettings } from '@/components/settings/ThresholdSettings'
 import { usePortfolio } from '@/hooks/usePortfolio'
 import { loadTheme, saveTheme, type ThemeChoice } from '@/lib/theme'
@@ -62,6 +64,20 @@ export function Settings() {
 
   return (
     <div className="animate-fade-up space-y-4">
+      <div>
+        <SectionTitle icon="🔗">Tu cuenta de IOL</SectionTitle>
+        <Card>
+          <BrokerConnection />
+        </Card>
+      </div>
+
+      <div>
+        <SectionTitle icon="🤖">Tu cuenta de IA</SectionTitle>
+        <Card>
+          <ApiKeySettings />
+        </Card>
+      </div>
+
       <div>
         <SectionTitle icon="🔔">Notificaciones</SectionTitle>
         <Card>

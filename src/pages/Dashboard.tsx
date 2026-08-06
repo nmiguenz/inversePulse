@@ -104,14 +104,32 @@ export function Dashboard() {
   const accumulatedGain = balance?.total_gain_loss ?? positions.reduce((s, p) => s + p.gain, 0)
 
   return (
-    <div className="animate-fade-up space-y-4">
-      <PullIndicator pull={pull} refreshing={refreshing} ready={ready} />
+    /**
+     * Una sola columna en celular, dos en escritorio.
+     *
+     * Los envoltorios de columna usan `contents` por debajo de `lg`, así que
+     * desaparecen del layout y sus hijos quedan como hermanos directos: en el
+     * celular el orden es exactamente el del DOM y no cambia nada respecto de
+     * antes. En `lg` los envoltorios vuelven a ser cajas y forman las columnas.
+     *
+     * La alternativa —dos árboles distintos, uno oculto por breakpoint—
+     * montaría cada componente dos veces y duplicaría las consultas.
+     */
+    <div className="animate-fade-up flex flex-col gap-4 lg:grid lg:grid-cols-[360px_minmax(0,1fr)] lg:items-start lg:gap-6">
+      <div className="lg:col-span-2">
+        <PullIndicator pull={pull} refreshing={refreshing} ready={ready} />
+      </div>
 
       {error && (
-        <p className="border-line bg-surface text-warning rounded-xl border px-4 py-2.5 text-[12px]">
+        <p className="border-line bg-surface text-warning rounded-xl border px-4 py-2.5 text-[12px] lg:col-span-2">
           {error}
         </p>
       )}
+
+      {/* ── Columna izquierda: el resumen y lo accionable ──────────────
+          En escritorio queda pegada arriba mientras el resto scrollea, así el
+          total y la próxima acción no se pierden al mirar las posiciones. */}
+      <div className="contents lg:sticky lg:top-24 lg:block lg:space-y-4">
 
       {/* Total de cartera — el número grande manda, todo lo demás lo acompaña */}
       <Card className="py-7 text-center">
@@ -182,6 +200,11 @@ export function Dashboard() {
         <IconChevronRight className="text-muted shrink-0" />
       </button>
 
+      </div>
+
+      {/* ── Columna derecha: los datos ─────────────────────────────── */}
+      <div className="contents lg:block lg:space-y-4">
+
       {/* Evolución de la cartera */}
       <div>
         <SectionTitle icon="📉">Evolución</SectionTitle>
@@ -217,6 +240,30 @@ export function Dashboard() {
             </p>
           </div>
           <SectorDonut slices={filteredView.sectors} />
+        </Card>
+      </div>
+
+      {/* Posiciones — mismas columnas que la app de IOL. Respeta el filtro. */}
+      <div>
+        <SectionTitle icon="📈">
+          {typeFilter
+            ? (derived.types.find((t) => t.type === typeFilter)?.label ?? 'Posiciones')
+            : 'Posiciones'}
+        </SectionTitle>
+        <Card className="p-0">
+          {/* Mismos anchos y proporciones que PositionRow, para que cada
+              título caiga sobre su columna */}
+          <div className="text-muted border-subtle flex items-center gap-2 border-b px-4 py-2.5 text-[11px]">
+            <span className="w-12 shrink-0 text-center">Activo</span>
+            <span className="min-w-0 flex-1 text-right">Día</span>
+            <span className="min-w-0 flex-1 text-right">Rend.</span>
+            <span className="min-w-0 flex-[1.4] text-right">Valorizado</span>
+          </div>
+          <ul>
+            {filtered.map((p) => (
+              <PositionRow key={p.id} position={p} />
+            ))}
+          </ul>
         </Card>
       </div>
 
@@ -280,30 +327,6 @@ export function Dashboard() {
         )}
       </div>
 
-      {/* Posiciones — mismas columnas que la app de IOL. Respeta el filtro. */}
-      <div>
-        <SectionTitle icon="📈">
-          {typeFilter
-            ? (derived.types.find((t) => t.type === typeFilter)?.label ?? 'Posiciones')
-            : 'Posiciones'}
-        </SectionTitle>
-        <Card className="p-0">
-          {/* Mismos anchos y proporciones que PositionRow, para que cada
-              título caiga sobre su columna */}
-          <div className="text-muted border-subtle flex items-center gap-2 border-b px-4 py-2.5 text-[11px]">
-            <span className="w-12 shrink-0 text-center">Activo</span>
-            <span className="min-w-0 flex-1 text-right">Día</span>
-            <span className="min-w-0 flex-1 text-right">Rend.</span>
-            <span className="min-w-0 flex-[1.4] text-right">Valorizado</span>
-          </div>
-          <ul>
-            {filtered.map((p) => (
-              <PositionRow key={p.id} position={p} />
-            ))}
-          </ul>
-        </Card>
-      </div>
-
       {/* Temáticas mundiales */}
       <div>
         <SectionTitle icon="🌍">Temáticas mundiales</SectionTitle>
@@ -327,8 +350,10 @@ export function Dashboard() {
         </Card>
       </div>
 
+      </div>
+
       {iolStatus?.last_sync_at && (
-        <p className="text-muted pt-1 text-center text-[11px]">
+        <p className="text-muted pt-1 text-center text-[11px] lg:col-span-2">
           Último sync{' '}
           {new Date(iolStatus.last_sync_at).toLocaleTimeString('es-AR', {
             hour: '2-digit',

@@ -1,5 +1,7 @@
+import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { IconBell } from '@/components/ui/Icon'
+import { usePortfolio } from '@/hooks/usePortfolio'
 
 type TopBarProps = {
   title: string
@@ -9,13 +11,24 @@ type TopBarProps = {
 
 export function TopBar({ title, subtitle, alertCount = 0 }: TopBarProps) {
   const navigate = useNavigate()
+  const { reload } = usePortfolio()
+  const [refreshing, setRefreshing] = useState(false)
+
+  async function refresh() {
+    setRefreshing(true)
+    try {
+      await reload()
+    } finally {
+      setRefreshing(false)
+    }
+  }
 
   return (
     <header
-      className="border-subtle bg-base/85 fixed inset-x-0 top-0 z-40 border-b backdrop-blur-xl"
+      className="border-subtle bg-base/85 fixed inset-x-0 top-0 z-40 border-b backdrop-blur-xl lg:left-56"
       style={{ paddingTop: 'env(safe-area-inset-top)' }}
     >
-      <div className="mx-auto flex h-14 max-w-lg items-center justify-between px-4">
+      <div className="mx-auto flex h-14 max-w-lg items-center justify-between px-4 lg:max-w-6xl lg:px-8">
         <div className="min-w-0">
           <h1 className="font-display truncate text-[15px] leading-tight font-semibold">{title}</h1>
           {subtitle && (
@@ -24,6 +37,26 @@ export function TopBar({ title, subtitle, alertCount = 0 }: TopBarProps) {
             </p>
           )}
         </div>
+
+        <div className="flex items-center gap-2">
+        {/* Solo en escritorio: en el celular ya está el pull-to-refresh, y en
+            una PC no hay forma de traer datos nuevos porque ese gesto escucha
+            `touchstart`, que un mouse nunca dispara. */}
+        <button
+          type="button"
+          aria-label="Actualizar datos"
+          onClick={() => void refresh()}
+          disabled={refreshing}
+          className="border-subtle bg-surface hover:bg-hover hidden h-9 items-center gap-2 rounded-full border px-3 text-[12px] transition-colors disabled:opacity-60 lg:flex"
+        >
+          <span
+            className={`text-secondary text-[13px] leading-none ${refreshing ? 'animate-spin' : ''}`}
+            aria-hidden
+          >
+            ↻
+          </span>
+          <span className="text-secondary">{refreshing ? 'Actualizando…' : 'Actualizar'}</span>
+        </button>
 
         <button
           type="button"
@@ -38,6 +71,7 @@ export function TopBar({ title, subtitle, alertCount = 0 }: TopBarProps) {
             </span>
           )}
         </button>
+        </div>
       </div>
     </header>
   )

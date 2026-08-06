@@ -10,6 +10,7 @@
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
 import { isServiceRole, userIdFromJwt } from '../_shared/auth.ts'
 import { advise, OPPORTUNITY_MODEL, type Recommendation } from '../_shared/claude.ts'
+import { getUserApiKey, markApiKeyUsed } from '../_shared/apiKey.ts'
 import { sendPush } from '../_shared/push.ts'
 import { corsHeaders, jsonWithCors, preflight } from '../_shared/cors.ts'
 
@@ -51,10 +52,6 @@ Deno.serve(async (req) => {
   const fromCron = isServiceRole(req)
   const callerId = fromCron ? null : userIdFromJwt(req)
   if (!fromCron && !callerId) return jsonWithCors({ error: 'No autorizado' }, { status: 401 })
-
-  if (!Deno.env.get('ANTHROPIC_API_KEY')) {
-    return jsonWithCors({ error: 'Falta el secret ANTHROPIC_API_KEY' }, { status: 500 })
-  }
 
   // Chequeo barato ANTES de gastar: si la tabla destino no existe, la llamada a
   // Opus se paga igual y el resultado se tira. Ya pasó una vez.
@@ -98,6 +95,16 @@ Deno.serve(async (req) => {
           )
         }
       }
+    }
+
+    // ---------- Sin key propia no hay asesor ----------
+    // No es un error: la app anda igual, solo sin las funciones de IA.
+    const apiKey = await getUserApiKey(db, user.id)
+    if (!apiKey) {
+      const detail = { skipped: 'sin API key de Anthropic configurada' }
+      if (callerId) return jsonWithCors({ error: 'Cargá tu API key de Anthropic en Configuración para usar el asesor.' }, { status: 400 })
+      results[user.id] = detail
+      continue
     }
 
     // ---------- Corte antes de gastar ----------
@@ -202,7 +209,7 @@ Deno.serve(async (req) => {
 
     let analysis
     try {
-      analysis = await advise({
+      analysis = await advise(apiKey, {
         positions: positions.map((p) => ({
           symbol: p.symbol,
           sector: p.sector,
@@ -251,6 +258,7 @@ Deno.serve(async (req) => {
       continue
     }
 
+    await markApiKeyUsed(db, user.id)
     const { recommendations, usage } = analysis
     if (!recommendations.length) {
       results[user.id] = { recommendations: 0, usage }

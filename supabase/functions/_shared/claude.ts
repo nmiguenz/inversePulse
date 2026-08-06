@@ -39,7 +39,29 @@ export type NewsAnalysis = {
   tags: string[]
 }
 
-const client = new Anthropic({ apiKey: Deno.env.get('ANTHROPIC_API_KEY') })
+/**
+ * Un cliente por key, no uno de módulo.
+ *
+ * Cada usuario pone la suya, así que la key llega por parámetro en vez de salir
+ * de una env var. El cache evita rearmar el cliente en cada llamada de un mismo
+ * lote sin atarlo a una key global.
+ */
+const clients = new Map<string, Anthropic>()
+
+function clientFor(apiKey: string): Anthropic {
+  const existing = clients.get(apiKey)
+  if (existing) return existing
+  const created = new Anthropic({ apiKey })
+  clients.set(apiKey, created)
+  return created
+}
+
+/** Se tira si alguien llama a una función de IA sin key. */
+export class MissingApiKeyError extends Error {
+  constructor() {
+    super('El usuario no tiene una API key de Anthropic configurada')
+  }
+}
 
 function buildSchema(topicSlugs: string[]) {
   return {
@@ -91,17 +113,19 @@ function buildSystemPrompt(topics: Array<{ slug: string; label: string }>, holdi
 }
 
 export async function analyzeNews(
+  apiKey: string,
   articles: NewsInput[],
   topics: Array<{ slug: string; label: string }>,
   holdings: string[],
 ): Promise<NewsAnalysis[]> {
+  if (!apiKey) throw new MissingApiKeyError()
   if (!articles.length) return []
 
   const userContent = articles
     .map((a) => `[${a.index}] (${a.source}) ${a.title}\n${a.snippet}`.trim())
     .join('\n\n')
 
-  const response = await client.messages.create({
+  const response = await clientFor(apiKey).messages.create({
     model: NEWS_MODEL,
     max_tokens: 4096,
     // Clasificación: no necesita razonamiento extendido.
@@ -246,10 +270,11 @@ function advisorSchema(symbols: string[]) {
   }
 }
 
-export async function advise(ctx: AdvisorContext): Promise<{
-  recommendations: Recommendation[]
-  usage: { input: number; output: number }
-}> {
+export async function advise(
+  apiKey: string,
+  ctx: AdvisorContext,
+): Promise<{ recommendations: Recommendation[]; usage: { input: number; output: number } }> {
+  if (!apiKey) throw new MissingApiKeyError()
   const system = [
     'Sos asesor financiero con perfil moderado-agresivo, especializado en CEDEARs argentinos.',
     'Tu trabajo es recomendar ACCIONES concretas sobre esta cartera, no describirla.',
@@ -320,7 +345,7 @@ export async function advise(ctx: AdvisorContext): Promise<{
     .filter(Boolean)
     .join('\n')
 
-  const response = await client.messages.create({
+  const response = await clientFor(apiKey).messages.create({
     model: OPPORTUNITY_MODEL,
     max_tokens: 8000,
     output_config: {
@@ -382,9 +407,11 @@ export type GoalContext = {
  *    descapitaliza, y es lo contrario de lo que la app tiene que hacer.
  */
 export async function adviseForGoal(
+  apiKey: string,
   ctx: AdvisorContext,
   goal: GoalContext,
 ): Promise<{ recommendations: Recommendation[]; usage: { input: number; output: number } }> {
+  if (!apiKey) throw new MissingApiKeyError()
   // El plazo define qué horizontes son coherentes. Sugerir "6+ meses" para una
   // meta a 51 días sería una recomendación que no puede cumplirse.
   const horizons =
@@ -474,7 +501,7 @@ export async function adviseForGoal(
     enum: horizons,
   }
 
-  const response = await client.messages.create({
+  const response = await clientFor(apiKey).messages.create({
     model: OPPORTUNITY_MODEL,
     max_tokens: 8000,
     output_config: { effort: 'medium', format: { type: 'json_schema', schema } },
@@ -562,10 +589,11 @@ function opportunitySchema(universeSymbols: string[]) {
 const fmtArs = (n: number) =>
   new Intl.NumberFormat('es-AR', { style: 'currency', currency: 'ARS', maximumFractionDigits: 0 }).format(n)
 
-export async function analyzeOpportunities(ctx: PortfolioContext): Promise<{
-  opportunities: Opportunity[]
-  usage: { input: number; output: number }
-}> {
+export async function analyzeOpportunities(
+  apiKey: string,
+  ctx: PortfolioContext,
+): Promise<{ opportunities: Opportunity[]; usage: { input: number; output: number } }> {
+  if (!apiKey) throw new MissingApiKeyError()
   const system = [
     'Sos analista financiero con perfil moderado-agresivo, especializado en CEDEARs argentinos.',
     'Detectás oportunidades concretas de inversión para un inversor individual.',
@@ -608,7 +636,7 @@ export async function analyzeOpportunities(ctx: PortfolioContext): Promise<{
     universeLines,
   ].join('\n')
 
-  const response = await client.messages.create({
+  const response = await clientFor(apiKey).messages.create({
     model: OPPORTUNITY_MODEL,
     max_tokens: 8000,
     // Acá SÍ queremos razonamiento: son decisiones sobre plata real.

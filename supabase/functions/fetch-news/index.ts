@@ -11,11 +11,22 @@
  * El pre-filtro del paso 3 es la medida de costo principal: sin él, esto haría
  * miles de llamadas por día sobre noticias que no le interesan al usuario.
  *
- * Requiere el secret ANTHROPIC_API_KEY.
+ * ── De quién es la key que analiza ──────────────────────────────────────
+ *
+ * El feed de noticias es COMPARTIDO: una corrida de Sonnet por lote sirve para
+ * todos los usuarios, así que no tiene sentido analizarlo una vez por persona.
+ * Se usa la key del primer usuario que tenga una cargada, que en la práctica es
+ * la del dueño de la instancia.
+ *
+ * Es una asimetría explícita y acotada: el análisis de noticias es barato y no
+ * escala con la cantidad de usuarios, mientras que el asesor —que es Opus y sí
+ * escala— usa siempre la key de cada uno. Si no hay NINGUNA key cargada, las
+ * noticias se guardan igual, sin resumen ni sentimiento.
  */
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
 import { isServiceRole, unauthorized } from '../_shared/auth.ts'
 import { fetchFeed, type FeedItem } from '../_shared/rss.ts'
+import { getUserApiKey } from '../_shared/apiKey.ts'
 import { analyzeNews, NEWS_MODEL, type NewsAnalysis } from '../_shared/claude.ts'
 import { sendPush } from '../_shared/push.ts'
 
@@ -55,10 +66,6 @@ function matchesTopics(item: FeedItem, topics: Topic[]): boolean {
 
 Deno.serve(async (req) => {
   if (!isServiceRole(req)) return unauthorized()
-  if (!Deno.env.get('ANTHROPIC_API_KEY')) {
-    return Response.json({ error: 'Falta el secret ANTHROPIC_API_KEY' }, { status: 500 })
-  }
-
   const [{ data: sources }, { data: topicRows }, { data: users }] = await Promise.all([
     db.from('rss_sources').select('*').eq('enabled', true),
     db.from('world_topics').select('slug, label, keywords').eq('is_active', true),
@@ -152,6 +159,15 @@ Deno.serve(async (req) => {
   stats.sentToClaude = toAnalyze.length
 
   // ---------- 4. Analizar en lotes ----------
+  //
+  // Con qué key. Si no hay ninguna cargada, las noticias se guardan crudas: es
+  // mejor un feed sin resumen que un feed vacío.
+  let analysisKey: string | null = null
+  for (const u of users ?? []) {
+    analysisKey = await getUserApiKey(db, u.id)
+    if (analysisKey) break
+  }
+
   const analyzedRows: Array<Record<string, unknown>> = []
   const alertPayloads: Array<{ analysis: NewsAnalysis; item: FeedItem & { source: string } }> = []
   const errors: string[] = []
@@ -164,20 +180,23 @@ Deno.serve(async (req) => {
     batches.push(toAnalyze.slice(i, i + BATCH_SIZE))
   }
 
-  const settled = await Promise.allSettled(
-    batches.map((batch) =>
-      analyzeNews(
-        batch.map((item, idx) => ({
-          index: idx,
-          title: item.title,
-          source: item.source,
-          snippet: item.snippet,
-        })),
-        topics,
-        holdings,
-      ),
-    ),
-  )
+  const settled = analysisKey
+    ? await Promise.allSettled(
+        batches.map((batch) =>
+          analyzeNews(
+            analysisKey!,
+            batch.map((item, idx) => ({
+              index: idx,
+              title: item.title,
+              source: item.source,
+              snippet: item.snippet,
+            })),
+            topics,
+            holdings,
+          ),
+        ),
+      )
+    : []
 
   for (const [batchIndex, result] of settled.entries()) {
     const batch = batches[batchIndex]

@@ -9,6 +9,7 @@
  * Docs: https://api.invertironline.com/Help/Autenticacion
  */
 import type { SupabaseClient } from 'https://esm.sh/@supabase/supabase-js@2'
+import { encrypt, decryptOrPlain } from './crypto.ts'
 
 const BASE = 'https://api.invertironline.com'
 
@@ -116,16 +117,39 @@ async function requestToken(body: Record<string, string>): Promise<TokenResponse
  * Orden: token en cache (si no venció) → refresh_token → usuario/password de env.
  */
 export async function getAccessToken(db: SupabaseClient, userId: string): Promise<string> {
-  const { data: creds } = await db
+  // Se piden las columnas cifradas y las viejas juntas. Si la 0019 todavía no
+  // corrió, las cifradas no existen y PostgREST rechaza el select ENTERO: sin
+  // este fallback, un error de esquema se convertía en "no tenés cuenta
+  // conectada" y el sync del dueño se cortaba con un diagnóstico falso.
+  let { data: creds, error: credsError } = await db
     .from('iol_credentials')
-    .select('refresh_token, access_token, access_token_expires_at')
+    .select(
+      'refresh_token, access_token, refresh_token_enc, access_token_enc, access_token_expires_at',
+    )
     .eq('user_id', userId)
     .maybeSingle()
 
+  if (credsError) {
+    const legacy = await db
+      .from('iol_credentials')
+      .select('refresh_token, access_token, access_token_expires_at')
+      .eq('user_id', userId)
+      .maybeSingle()
+
+    // Si tampoco anda el select viejo, el problema es otro y hay que verlo
+    if (legacy.error) throw new Error(`No se pudo leer la conexión: ${legacy.error.message}`)
+    creds = legacy.data
+  }
+
+  // Se prefiere la columna cifrada; la de texto plano queda solo para las filas
+  // anteriores a la 0019 y se reescribe cifrada en el próximo refresh.
+  const refreshToken = await decryptOrPlain(creds?.refresh_token_enc ?? creds?.refresh_token ?? null)
+  const accessToken = await decryptOrPlain(creds?.access_token_enc ?? creds?.access_token ?? null)
+
   // Cache con 60s de margen
-  if (creds?.access_token && creds.access_token_expires_at) {
+  if (accessToken && creds?.access_token_expires_at) {
     const expiresAt = new Date(creds.access_token_expires_at).getTime()
-    if (expiresAt - Date.now() > 60_000) return creds.access_token
+    if (expiresAt - Date.now() > 60_000) return accessToken
   }
 
   // Sin token propio no hay sync. NO existe un login global de respaldo.
@@ -135,14 +159,14 @@ export async function getAccessToken(db: SupabaseClient, userId: string): Promis
   // acá sin credenciales, se usaban las globales, y la cartera del dueño
   // —posiciones, saldos y movimientos— terminaba copiada adentro de la cuenta
   // del desconocido. Un solo camino para todos es lo que lo evita.
-  if (!creds?.refresh_token) {
+  if (!refreshToken) {
     throw new NoConnectionError(`El usuario ${userId} no tiene una cuenta de IOL conectada`)
   }
 
   let token: TokenResponse
   try {
     token = await requestToken({
-      refresh_token: creds.refresh_token,
+      refresh_token: refreshToken,
       grant_type: 'refresh_token',
     })
   } catch (err) {
@@ -154,6 +178,8 @@ export async function getAccessToken(db: SupabaseClient, userId: string): Promis
       .update({
         refresh_token: null,
         access_token: null,
+        refresh_token_enc: null,
+        access_token_enc: null,
         last_sync_error: 'La conexión con IOL venció. Volvé a conectar tu cuenta.',
         updated_at: new Date().toISOString(),
       })
@@ -164,13 +190,32 @@ export async function getAccessToken(db: SupabaseClient, userId: string): Promis
     )
   }
 
-  await db.from('iol_credentials').upsert({
+  const expiresAt = new Date(Date.now() + token.expires_in * 1000).toISOString()
+
+  const { error: saveError } = await db.from('iol_credentials').upsert({
     user_id: userId,
-    refresh_token: token.refresh_token,
-    access_token: token.access_token,
-    access_token_expires_at: new Date(Date.now() + token.expires_in * 1000).toISOString(),
+    refresh_token_enc: await encrypt(token.refresh_token),
+    access_token_enc: await encrypt(token.access_token),
+    // Se limpian las columnas viejas: en cuanto la fila pasa por acá, deja de
+    // haber tokens en claro en la base
+    refresh_token: null,
+    access_token: null,
+    access_token_expires_at: expiresAt,
     updated_at: new Date().toISOString(),
   })
+
+  // Mismo caso que el select: antes de la 0019 las columnas cifradas no
+  // existen. Se guarda como antes para no perder el refresh token rotado —
+  // perderlo obligaría a reconectar a mano.
+  if (saveError) {
+    await db.from('iol_credentials').upsert({
+      user_id: userId,
+      refresh_token: token.refresh_token,
+      access_token: token.access_token,
+      access_token_expires_at: expiresAt,
+      updated_at: new Date().toISOString(),
+    })
+  }
 
   return token.access_token
 }
