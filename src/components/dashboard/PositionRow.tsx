@@ -26,32 +26,36 @@ export function PositionRow({ position }: { position: PositionMetrics }) {
         onClick={() => navigate(`/activo/${position.symbol}`)}
         className="border-subtle active:bg-hover flex w-full items-center gap-2 border-b px-4 py-3.5 text-left transition-colors"
       >
-        <AssetLogo symbol={position.symbol} sector={position.sector} />
+        {/* El símbolo va debajo del logo, no al lado: en una columna angosta
+            "PRMCAPB" se recortaba a "P." y no se entendía nada. Apilado tiene
+            todo el ancho del bloque para él. */}
+        <div className="w-12 shrink-0 text-center">
+          <div className="flex justify-center">
+            <AssetLogo symbol={position.symbol} sector={position.sector} />
+          </div>
+          <p className="text-primary mt-1 truncate text-[10px] font-semibold">{position.symbol}</p>
+        </div>
 
-        {/* min-w-0 + truncate: sin esto el símbolo largo (PRMCAPB) se desborda
-            sobre la columna de al lado en vez de recortarse */}
-        <div className="min-w-0 flex-1">
-          <p className="text-primary truncate text-[14px] font-semibold">{position.symbol}</p>
-          <p className="text-muted mt-0.5 truncate text-[11px]">
-            {position.description ?? position.sector}
+        {/* Las tres columnas de números se reparten el resto en partes iguales,
+            así quedan alineadas entre filas sin anchos fijos que no entren */}
+        <div className="min-w-0 flex-1 text-right">
+          <p className={`tnum text-[13px] whitespace-nowrap ${toneText[dayTone]}`}>
+            {formatPct(position.dayPct)}
           </p>
         </div>
 
-        {/* Anchos fijos y shrink-0 para que las columnas de números queden
-            alineadas entre filas. Las etiquetas van en el encabezado, no en
-            cada fila. */}
-        <div className="w-[52px] shrink-0 text-right">
-          <p className={`tnum text-[12px] ${toneText[dayTone]}`}>{formatPct(position.dayPct)}</p>
+        <div className="min-w-0 flex-1 text-right">
+          <p className={`tnum text-[13px] whitespace-nowrap ${toneText[gainTone]}`}>
+            {formatPct(position.gainPct)}
+          </p>
         </div>
 
-        {/* Más ancha que la diaria: el rendimiento acumulado llega a tres
-            dígitos (+120,00%), la variación del día prácticamente nunca */}
-        <div className="w-[58px] shrink-0 text-right">
-          <p className={`tnum text-[12px] ${toneText[gainTone]}`}>{formatPct(position.gainPct)}</p>
-        </div>
-
-        <div className="w-[82px] shrink-0 text-right">
-          <p className="tnum text-primary text-[13px] font-semibold">{format(position.value)}</p>
+        {/* Más ancha que las otras dos: "$ 1.616.005" ocupa bastante más que
+            un porcentaje y si no, se parte en dos líneas */}
+        <div className="min-w-0 flex-[1.4] text-right">
+          <p className="tnum text-primary text-[13px] font-semibold whitespace-nowrap">
+            {format(position.value)}
+          </p>
           <p className="text-muted mt-0.5 text-[11px]">{position.weight.toFixed(1)}%</p>
         </div>
       </button>

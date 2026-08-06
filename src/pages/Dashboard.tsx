@@ -288,14 +288,13 @@ export function Dashboard() {
             : 'Posiciones'}
         </SectionTitle>
         <Card className="p-0">
-          {/* El spacer replica el ancho del logo (h-8) más el gap, para que
-              estos títulos caigan sobre las columnas de las filas */}
+          {/* Mismos anchos y proporciones que PositionRow, para que cada
+              título caiga sobre su columna */}
           <div className="text-muted border-subtle flex items-center gap-2 border-b px-4 py-2.5 text-[11px]">
-            <span className="w-8 shrink-0" aria-hidden />
-            <span className="min-w-0 flex-1">Símbolo</span>
-            <span className="w-[52px] shrink-0 text-right">Día</span>
-            <span className="w-[58px] shrink-0 text-right">Rend.</span>
-            <span className="w-[82px] shrink-0 text-right">Valorizado</span>
+            <span className="w-12 shrink-0 text-center">Activo</span>
+            <span className="min-w-0 flex-1 text-right">Día</span>
+            <span className="min-w-0 flex-1 text-right">Rend.</span>
+            <span className="min-w-0 flex-[1.4] text-right">Valorizado</span>
           </div>
           <ul>
             {filtered.map((p) => (
