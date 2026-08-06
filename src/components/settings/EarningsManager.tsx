@@ -76,8 +76,24 @@ export function EarningsManager() {
     await supabase.from('earnings_calendar').delete().eq('id', id)
   }
 
+  // Los que todavía no tienen fecha futura cargada. Es lo mismo que evalúa el
+  // recordatorio diario, mostrado acá para que la alerta se pueda resolver.
+  const missing = symbols.filter((s) => !rows.some((r) => r.symbol === s && !r.is_reported)).sort()
+
   return (
     <div>
+      {missing.length > 0 && (
+        <div className="bg-warning-soft mb-3 rounded-xl px-3.5 py-3">
+          <p className="text-primary text-[13px] font-medium">
+            {missing.length === 1 ? 'Falta una fecha' : `Faltan ${missing.length} fechas`}
+          </p>
+          <p className="text-secondary mt-1 text-[12px] leading-relaxed">
+            Sin fecha cargada no hay aviso antes del reporte:{' '}
+            <span className="font-mono">{missing.join(', ')}</span>
+          </p>
+        </div>
+      )}
+
       <form onSubmit={add} className="space-y-2">
         <div className="flex gap-2">
           <select

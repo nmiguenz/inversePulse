@@ -288,11 +288,14 @@ export function Dashboard() {
             : 'Posiciones'}
         </SectionTitle>
         <Card className="p-0">
-          <div className="text-muted border-subtle flex items-center gap-3 border-b px-5 py-2.5 text-[11px]">
-            <span className="flex-1">Símbolo</span>
-            <span className="w-[68px] text-right">Var. diaria</span>
-            <span className="w-[68px] text-right">Rendimiento</span>
-            <span className="w-[86px] text-right">Valorizado</span>
+          {/* El spacer replica el ancho del logo (h-8) más el gap, para que
+              estos títulos caigan sobre las columnas de las filas */}
+          <div className="text-muted border-subtle flex items-center gap-2 border-b px-4 py-2.5 text-[11px]">
+            <span className="w-8 shrink-0" aria-hidden />
+            <span className="min-w-0 flex-1">Símbolo</span>
+            <span className="w-[52px] shrink-0 text-right">Día</span>
+            <span className="w-[58px] shrink-0 text-right">Rend.</span>
+            <span className="w-[82px] shrink-0 text-right">Valorizado</span>
           </div>
           <ul>
             {filtered.map((p) => (

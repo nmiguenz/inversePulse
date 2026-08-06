@@ -1,5 +1,6 @@
 import { Outlet, useLocation } from 'react-router-dom'
 import { BottomNav } from './BottomNav'
+import { ScrollToTop } from './ScrollToTop'
 import { TopBar } from './TopBar'
 import { useAlerts } from '@/hooks/useAlerts'
 import { usePortfolio } from '@/hooks/usePortfolio'
@@ -33,6 +34,7 @@ export function AppShell() {
   return (
     <CurrencyProvider mep={mep}>
       <div className="bg-base min-h-dvh">
+        <ScrollToTop />
         <TopBar title={meta.title} subtitle={meta.subtitle} alertCount={alertCount} />
 
         <main
