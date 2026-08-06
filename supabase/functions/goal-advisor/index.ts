@@ -22,6 +22,7 @@
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
 import { adviseForGoal, type AdvisorContext, type GoalContext } from '../_shared/claude.ts'
 import { isServiceRole, userIdFromJwt } from '../_shared/auth.ts'
+import { jsonWithCors, preflight } from '../_shared/cors.ts'
 
 const db = createClient(
   Deno.env.get('SUPABASE_URL')!,
@@ -237,17 +238,22 @@ async function planGoal(userId: string, goalId: string, ctx: AdvisorContext) {
 }
 
 Deno.serve(async (req) => {
+  // El preflight llega sin Authorization: tiene que contestarse antes de
+  // cualquier chequeo, o el browser reporta un error de red sin detalle
+  const pre = preflight(req)
+  if (pre) return pre
+
   const fromCron = isServiceRole(req)
   const userId = fromCron ? null : userIdFromJwt(req)
 
   if (!fromCron && !userId) {
-    return Response.json({ error: 'no autorizado' }, { status: 401 })
+    return jsonWithCors({ error: 'no autorizado' }, { status: 401 })
   }
 
   // ── Camino de la app: una meta puntual ─────────────────────────────────
   if (userId) {
     const body = (await req.json().catch(() => ({}))) as { goal_id?: string }
-    if (!body.goal_id) return Response.json({ error: 'falta goal_id' }, { status: 400 })
+    if (!body.goal_id) return jsonWithCors({ error: 'falta goal_id' }, { status: 400 })
 
     const { data: goal } = await db
       .from('goal_portfolios')
@@ -256,7 +262,7 @@ Deno.serve(async (req) => {
       .eq('user_id', userId)
       .maybeSingle()
 
-    if (!goal) return Response.json({ error: 'meta no encontrada' }, { status: 404 })
+    if (!goal) return jsonWithCors({ error: 'meta no encontrada' }, { status: 404 })
 
     // Cada generación es una llamada a Opus. Sin este freno, tocar el botón
     // repetido cuesta plata sin cambiar el plan.
@@ -264,7 +270,7 @@ Deno.serve(async (req) => {
       const elapsed = Date.now() - new Date(goal.plan_generated_at).getTime()
       if (elapsed < COOLDOWN_MINUTES * 60_000) {
         const wait = Math.ceil((COOLDOWN_MINUTES * 60_000 - elapsed) / 60_000)
-        return Response.json(
+        return jsonWithCors(
           { error: `El plan se generó hace poco. Probá de nuevo en ${wait} minutos.` },
           { status: 429 },
         )
@@ -272,15 +278,15 @@ Deno.serve(async (req) => {
     }
 
     const ctx = await buildAdvisorContext(userId)
-    if (!ctx) return Response.json({ error: 'universo de activos vacío' }, { status: 400 })
+    if (!ctx) return jsonWithCors({ error: 'universo de activos vacío' }, { status: 400 })
 
     try {
       const result = await planGoal(userId, body.goal_id, ctx)
-      return Response.json({ ok: true, ...result })
+      return jsonWithCors({ ok: true, ...result })
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err)
       console.error('[goal-advisor]', message)
-      return Response.json({ error: message }, { status: 500 })
+      return jsonWithCors({ error: message }, { status: 500 })
     }
   }
 
@@ -311,5 +317,5 @@ Deno.serve(async (req) => {
     results[user.id] = perGoal
   }
 
-  return Response.json({ ok: true, results })
+  return jsonWithCors({ ok: true, results })
 })

@@ -8,9 +8,10 @@
  * análisis, volver a preguntar cuesta plata y devuelve lo mismo.
  */
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
-import { isServiceRole, unauthorized, userIdFromJwt } from '../_shared/auth.ts'
+import { isServiceRole, userIdFromJwt } from '../_shared/auth.ts'
 import { advise, OPPORTUNITY_MODEL, type Recommendation } from '../_shared/claude.ts'
 import { sendPush } from '../_shared/push.ts'
+import { corsHeaders, jsonWithCors, preflight } from '../_shared/cors.ts'
 
 const db = createClient(
   Deno.env.get('SUPABASE_URL')!,
@@ -39,22 +40,27 @@ function trend(prices: number[]): string {
 }
 
 Deno.serve(async (req) => {
+  // El preflight va PRIMERO: llega sin Authorization, así que cualquier chequeo
+  // antes de esto lo rechaza y el browser nunca ve los headers de CORS
+  const pre = preflight(req)
+  if (pre) return pre
+
   // Dos caminos: el cron con la service role key, y el botón de la app con el
   // JWT del usuario. El segundo existe para que "¿en qué lo pongo?" pueda
   // pedir un análisis en el momento en vez de mostrar que no hay ninguno.
   const fromCron = isServiceRole(req)
   const callerId = fromCron ? null : userIdFromJwt(req)
-  if (!fromCron && !callerId) return unauthorized()
+  if (!fromCron && !callerId) return jsonWithCors({ error: 'No autorizado' }, { status: 401 })
 
   if (!Deno.env.get('ANTHROPIC_API_KEY')) {
-    return Response.json({ error: 'Falta el secret ANTHROPIC_API_KEY' }, { status: 500 })
+    return jsonWithCors({ error: 'Falta el secret ANTHROPIC_API_KEY' }, { status: 500 })
   }
 
   // Chequeo barato ANTES de gastar: si la tabla destino no existe, la llamada a
   // Opus se paga igual y el resultado se tira. Ya pasó una vez.
   const { error: schemaError } = await db.from('recommendations').select('id').limit(1)
   if (schemaError) {
-    return Response.json(
+    return jsonWithCors(
       { error: `No se puede escribir en recommendations: ${schemaError.message}. ¿Corriste 0009_advisor.sql?` },
       { status: 500 },
     )
@@ -86,7 +92,7 @@ Deno.serve(async (req) => {
         const elapsed = Date.now() - new Date(recent.created_at).getTime()
         if (elapsed < ON_DEMAND_COOLDOWN_MINUTES * 60_000) {
           const wait = Math.ceil((ON_DEMAND_COOLDOWN_MINUTES * 60_000 - elapsed) / 60_000)
-          return Response.json(
+          return jsonWithCors(
             { error: `El asesor analizó hace poco. Probá de nuevo en ${wait} minutos.` },
             { status: 429 },
           )
@@ -344,5 +350,5 @@ Deno.serve(async (req) => {
     }
   }
 
-  return Response.json({ ok: true, results })
+  return jsonWithCors({ ok: true, results })
 })
