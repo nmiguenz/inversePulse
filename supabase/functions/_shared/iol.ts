@@ -163,8 +163,68 @@ async function get<T>(token: string, path: string): Promise<T> {
   return (await res.json()) as T
 }
 
+/**
+ * Una operación cerrada (compra, venta, suscripción o rescate de FCI, pago de
+ * dividendos).
+ *
+ * Campos verificados contra la respuesta real de la cuenta, no contra la
+ * documentación. El detalle que importa: en una orden a precio de mercado
+ * `cantidad` trae el MONTO en pesos, no la cantidad de papeles — para una
+ * compra de 1 GOOGL vino `cantidad: 10813` y `cantidadOperada: 1`. Los campos
+ * de la ejecución son los "Operada".
+ */
+export type IolOperacion = {
+  numero?: number
+  fechaOrden?: string
+  fechaOperada?: string
+  tipo?: string // Compra, Venta, Suscripción FCI, Rescate FCI, Pago de Dividendos
+  estado?: string // terminada, cancelada, pendiente
+  mercado?: string
+  simbolo?: string
+  cantidad?: number
+  cantidadOperada?: number
+  monto?: number
+  montoOperado?: number
+  precioOperado?: number
+  precio?: number
+  moneda?: string
+  descripcion?: string
+}
+
+/** Formato de fecha que espera la API en los filtros */
+function isoDate(d: string | Date): string {
+  return typeof d === 'string' ? d : d.toISOString().slice(0, 10)
+}
+
 export const iol = {
   portfolio: (token: string, pais = 'argentina') =>
     get<IolPortfolio>(token, `/api/v2/portafolio/${pais}`),
+
   estadoCuenta: (token: string) => get<IolEstadoCuenta>(token, '/api/v2/estadocuenta'),
+
+  /**
+   * Operaciones cerradas en un rango. Se piden TODOS los estados y el filtrado
+   * se hace después: una orden cancelada tiene que quedar registrada como
+   * cancelada, no desaparecer.
+   */
+  operaciones: (token: string, desde: string | Date, hasta: string | Date) =>
+    get<IolOperacion[]>(
+      token,
+      `/api/v2/operaciones?filtro.fechaDesde=${isoDate(desde)}&filtro.fechaHasta=${isoDate(hasta)}`,
+    ),
+
+  /** Cotización puntual de un título, tenga o no posición abierta */
+  cotizacion: (token: string, simbolo: string, mercado = 'bCBA', plazo = 't1') =>
+    get<Record<string, unknown>>(
+      token,
+      `/api/v2/${mercado}/Titulos/${simbolo}/Cotizacion?model.mercado=${mercado}&model.simbolo=${simbolo}&model.plazo=${plazo}`,
+    ),
+
+  // NO hay endpoint de movimientos de dinero (depósitos y extracciones).
+  // Probé /cuentas-bancarias/movimientos en GET y POST con cuatro bodies,
+  // /estadocuenta/movimientos, /micuenta/movimientos y /Cuenta/Movimientos:
+  // las seis devuelven el mismo "Runtime Error" 500 genérico de ASP.NET, que
+  // es lo mismo que devuelve una ruta inexistente. No es un problema de
+  // parámetros. `fetch-transactions` los detecta por diferencia de saldo y
+  // pregunta en vez de inventarlos.
 }

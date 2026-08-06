@@ -1,8 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Card, EmptyState } from '@/components/ui/Card'
 import { RecommendationCard } from '@/components/opportunities/RecommendationCard'
+import { MoverPanel } from '@/components/opportunities/MoverPanel'
 import { supabase, isSupabaseConfigured } from '@/lib/supabase'
 import { useAuth } from '@/lib/auth'
+import { useMarketMovers } from '@/hooks/useMarketMovers'
 import { uniqueChannelName } from '@/lib/realtime'
 import { formatPct } from '@/lib/format'
 import type { Recommendation } from '@/lib/types'
@@ -13,6 +15,7 @@ export function Opportunities() {
   const [past, setPast] = useState<Recommendation[]>([])
   const [loading, setLoading] = useState(true)
   const channelName = useRef(uniqueChannelName('recommendations-feed'))
+  const movers = useMarketMovers()
 
   const load = useCallback(async () => {
     if (!isSupabaseConfigured || !session) {
@@ -108,11 +111,74 @@ export function Opportunities() {
           description="El asesor analiza dos veces por día y solo guarda acciones con fundamento. Que no haya nada acá significa que hoy no vio motivo para mover plata — eso también es información."
         />
       ) : (
-        <ul className="space-y-3">
-          {active.map((rec) => (
-            <RecommendationCard key={rec.id} rec={rec} />
-          ))}
-        </ul>
+        <div>
+          {/* Lo accionable va arriba y destacado: los paneles de abajo son
+              contexto, esto es lo que el asesor sugiere hacer con tu plata */}
+          <div className="mb-2 flex items-center gap-2 px-1">
+            <span className="bg-accent h-1.5 w-1.5 rounded-full" aria-hidden />
+            <h2 className="text-primary text-[14px] font-semibold">
+              {active.length === 1 ? 'Acción sugerida' : `${active.length} acciones sugeridas`}
+            </h2>
+          </div>
+          <ul className="space-y-3">
+            {active.map((rec) => (
+              <RecommendationCard key={rec.id} rec={rec} />
+            ))}
+          </ul>
+        </div>
+      )}
+
+      {/* ── Qué se mueve en el mercado ────────────────────────────────── */}
+      {!movers.loading && (
+        <div className="space-y-4 pt-1">
+          <MoverPanel
+            title="Mejores del día"
+            subtitle={movers.total ? `${movers.total} activos` : undefined}
+            movers={movers.bestToday}
+            metric="day"
+            emptyHint={
+              movers.total === 0
+                ? 'Todavía no se sincronizaron cotizaciones del mercado. Se actualizan al cierre de cada rueda.'
+                : 'Ninguna cotización trajo variación diaria en la última sincronización.'
+            }
+          />
+
+          <MoverPanel
+            title="Mejores de la semana"
+            subtitle={
+              movers.weeklyCoverage < 0.5 && movers.total > 0 ? 'datos parciales' : undefined
+            }
+            movers={movers.bestWeek}
+            metric="week"
+            emptyHint="La variación semanal necesita el cierre de hace una semana. Se va completando a medida que la app acumula cierres diarios."
+          />
+
+          <div>
+            <MoverPanel
+              title="Peores de la semana"
+              movers={movers.worstWeek}
+              metric="week"
+              emptyHint="La variación semanal necesita el cierre de hace una semana. Se va completando a medida que la app acumula cierres diarios."
+            />
+            {movers.worstWeek.length > 0 && (
+              <p className="text-muted mt-2 px-1 text-[11px] leading-relaxed">
+                Que algo haya caído no significa que sea mala compra: a veces es exactamente lo
+                contrario. Esto es lo que bajó, no una recomendación de evitarlo.
+              </p>
+            )}
+          </div>
+
+          {movers.stale && movers.updatedAt && (
+            <p className="text-muted px-1 text-[11px]">
+              Cotizaciones del{' '}
+              {new Date(movers.updatedAt).toLocaleDateString('es-AR', {
+                day: '2-digit',
+                month: '2-digit',
+              })}
+              : el mercado estuvo cerrado desde entonces.
+            </p>
+          )}
+        </div>
       )}
 
       {past.length > 0 && (

@@ -190,3 +190,66 @@ export type SectorSlice = {
   value: number
   pct: number
 }
+
+// ---------- Mercado y rendimiento ----------
+
+/** Cotización de un activo del universo, lo tengas o no */
+export type MarketQuote = {
+  symbol: string
+  price: number
+  previous_close: number | null
+  daily_change_pct: number | null
+  /** NULL mientras no haya cierre de hace una semana: son "faltan datos", no 0% */
+  week_change_pct: number | null
+  volume: number | null
+  quoted_at: string | null
+  updated_at: string
+}
+
+export type PerformanceVerdict = 'ok' | 'mixed' | 'bad' | 'insufficient_data'
+
+/**
+ * Revisión de un período cerrado.
+ *
+ * `net_flows` es lo que hace que el resto tenga sentido: sin descontar aportes
+ * y retiros, `end_value − start_value` mezcla plata que pusiste con plata que
+ * ganaste.
+ */
+export type PerformanceReview = {
+  id: string
+  period_start: string
+  period_end: string
+  start_value: number
+  end_value: number
+  net_flows: number
+  deposits: number
+  withdrawals: number
+  dividends: number
+  return_pct: number | null
+  return_amount: number | null
+  return_usd_pct: number | null
+  mep_start: number | null
+  mep_end: number | null
+  /** Cuánto valdría la cartera si no hubieras tocado nada */
+  hold_value: number | null
+  hold_return_pct: number | null
+  verdict: PerformanceVerdict
+  verdict_reason: string | null
+  /** Qué datos faltaron. NULL = el cálculo fue completo. */
+  data_gaps: string[] | null
+  created_at: string
+}
+
+export type Transaction = {
+  id: string
+  kind: string | null
+  side: string
+  symbol: string | null
+  quantity: number
+  price: number
+  total: number
+  currency: string | null
+  description: string | null
+  notes: string | null
+  executed_at: string
+}

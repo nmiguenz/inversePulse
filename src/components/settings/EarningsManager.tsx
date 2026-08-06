@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState, type FormEvent } from 'react'
 import { supabase } from '@/lib/supabase'
 import { usePortfolio } from '@/hooks/usePortfolio'
+import { missingEarnings, missingEarningsTitle, reportsEarnings } from '@/lib/earnings'
 
 type Earnings = {
   id: string
@@ -33,9 +34,7 @@ export function EarningsManager() {
   const [error, setError] = useState('')
 
   // Solo tiene sentido cargar earnings de lo que tenés
-  const symbols = positions
-    .filter((p) => p.asset_type === 'CEDEAR' || p.asset_type === 'ACCION')
-    .map((p) => p.symbol)
+  const symbols = positions.filter((p) => reportsEarnings(p.asset_type)).map((p) => p.symbol)
 
   const load = useCallback(async () => {
     const today = new Date().toISOString().slice(0, 10)
@@ -76,16 +75,16 @@ export function EarningsManager() {
     await supabase.from('earnings_calendar').delete().eq('id', id)
   }
 
-  // Los que todavía no tienen fecha futura cargada. Es lo mismo que evalúa el
-  // recordatorio diario, mostrado acá para que la alerta se pueda resolver.
-  const missing = symbols.filter((s) => !rows.some((r) => r.symbol === s && !r.is_reported)).sort()
+  // La misma regla que evalúa la alerta, mostrada acá para poder resolverla.
+  // `rows` ya viene filtrado a report_date >= hoy.
+  const missing = missingEarnings(positions, rows)
 
   return (
     <div>
       {missing.length > 0 && (
         <div className="bg-warning-soft mb-3 rounded-xl px-3.5 py-3">
           <p className="text-primary text-[13px] font-medium">
-            {missing.length === 1 ? 'Falta una fecha' : `Faltan ${missing.length} fechas`}
+            {missingEarningsTitle(missing)}
           </p>
           <p className="text-secondary mt-1 text-[12px] leading-relaxed">
             Sin fecha cargada no hay aviso antes del reporte:{' '}

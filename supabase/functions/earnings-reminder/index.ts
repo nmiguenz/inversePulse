@@ -108,8 +108,10 @@ Deno.serve(async (req) => {
     const notifies = (user.settings as Record<string, unknown>)?.notify_decisions !== false
 
     // ── 1. CEDEARs sin fecha de reporte ──────────────────────────────────
-    // Mismo criterio que la pantalla de carga: CEDEAR y ACCION reportan
-    // resultados, los bonos y los FCI no.
+    // Misma regla que `missingEarnings()` en src/lib/earnings.ts, que es la
+    // canónica. Está duplicada porque el bundler de Supabase solo sube lo que
+    // cuelga de supabase/functions y no puede importar desde src/. Si cambia
+    // el criterio, hay que tocar los dos lados.
     const missing = mine
       .filter(
         (p) =>

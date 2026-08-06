@@ -3,6 +3,7 @@ import { BottomNav } from './BottomNav'
 import { ScrollToTop } from './ScrollToTop'
 import { TopBar } from './TopBar'
 import { useAlerts } from '@/hooks/useAlerts'
+import { useEarningsCheck } from '@/hooks/useEarningsCheck'
 import { usePortfolio } from '@/hooks/usePortfolio'
 import { CurrencyProvider } from '@/lib/currency'
 
@@ -12,7 +13,7 @@ const titles: Record<string, { title: string; subtitle?: string }> = {
   '/oportunidades': { title: 'Oportunidades', subtitle: 'Detectadas por AI' },
   '/noticias': { title: 'Noticias', subtitle: 'Mercados y temáticas' },
   '/config': { title: 'Configuración', subtitle: 'Umbrales y notificaciones' },
-  '/historial': { title: 'Historial', subtitle: 'Operaciones registradas' },
+  '/historial': { title: 'Historial', subtitle: 'Movimientos y rendimiento' },
   '/metas': { title: 'Metas', subtitle: 'Tu cartera por objetivo' },
 }
 
@@ -26,6 +27,9 @@ export function AppShell() {
 
   const { unreadCount: alertCount } = useAlerts()
   const { latestRates } = usePortfolio()
+
+  // Al abrir la app, avisa si falta cargar alguna fecha de resultados
+  useEarningsCheck()
 
   // La cotización MEP viene del mismo sync que el resto. Si todavía no hay,
   // CurrencyProvider deshabilita el toggle en vez de inventar un tipo de cambio.
