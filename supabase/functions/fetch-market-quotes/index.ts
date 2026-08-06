@@ -105,9 +105,21 @@ async function weeklyChange(symbols: string[], current: Map<string, number>) {
 Deno.serve(async (req) => {
   if (!isServiceRole(req)) return unauthorized()
 
-  const { data: users } = await db.from('users').select('id').limit(1)
-  const userId = users?.[0]?.id
-  if (!userId) return Response.json({ error: 'sin usuarios' }, { status: 400 })
+  // Las cotizaciones son datos públicos y se comparten entre todos, pero para
+  // pedirlas hace falta el token de ALGUIEN. Se usa la primera conexión activa
+  // que haya, no `users[0]`: con varios usuarios, ese primero puede ser alguien
+  // que nunca conectó nada, y la corrida entera fallaba.
+  const { data: connected } = await db
+    .from('iol_credentials')
+    .select('user_id')
+    .not('refresh_token', 'is', null)
+    .order('last_sync_at', { ascending: false, nullsFirst: false })
+    .limit(1)
+
+  const userId = connected?.[0]?.user_id
+  if (!userId) {
+    return Response.json({ ok: true, skipped: 'ninguna cuenta de IOL conectada' })
+  }
 
   const [{ data: universe }, { data: held }] = await Promise.all([
     db.from('asset_metadata').select('symbol').eq('suggestable', true),

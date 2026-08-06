@@ -86,6 +86,15 @@ type TokenResponse = {
 
 export class IolAuthError extends Error {}
 
+/**
+ * El usuario no conectó ninguna cuenta.
+ *
+ * Es un tipo aparte para que las funciones que recorren usuarios puedan
+ * saltearlo en silencio: no es un error del sistema, es alguien que todavía no
+ * terminó de configurarse.
+ */
+export class NoConnectionError extends Error {}
+
 async function requestToken(body: Record<string, string>): Promise<TokenResponse> {
   const res = await fetch(`${BASE}/token`, {
     method: 'POST',
@@ -119,18 +128,40 @@ export async function getAccessToken(db: SupabaseClient, userId: string): Promis
     if (expiresAt - Date.now() > 60_000) return creds.access_token
   }
 
+  // Sin token propio no hay sync. NO existe un login global de respaldo.
+  //
+  // Antes había uno, con IOL_USERNAME/IOL_PASSWORD de env, y era un agujero:
+  // como el alta de usuarios estaba abierta, cualquiera que se registrara caía
+  // acá sin credenciales, se usaban las globales, y la cartera del dueño
+  // —posiciones, saldos y movimientos— terminaba copiada adentro de la cuenta
+  // del desconocido. Un solo camino para todos es lo que lo evita.
+  if (!creds?.refresh_token) {
+    throw new NoConnectionError(`El usuario ${userId} no tiene una cuenta de IOL conectada`)
+  }
+
   let token: TokenResponse
-  if (creds?.refresh_token) {
-    try {
-      token = await requestToken({
-        refresh_token: creds.refresh_token,
-        grant_type: 'refresh_token',
+  try {
+    token = await requestToken({
+      refresh_token: creds.refresh_token,
+      grant_type: 'refresh_token',
+    })
+  } catch (err) {
+    // El refresh token murió: hay que reconectar desde la app. Se deja
+    // registrado para que el frontend muestre el cartel en vez de fallar en
+    // silencio hasta que alguien mire los logs.
+    await db
+      .from('iol_credentials')
+      .update({
+        refresh_token: null,
+        access_token: null,
+        last_sync_error: 'La conexión con IOL venció. Volvé a conectar tu cuenta.',
+        updated_at: new Date().toISOString(),
       })
-    } catch {
-      token = await loginWithPassword()
-    }
-  } else {
-    token = await loginWithPassword()
+      .eq('user_id', userId)
+
+    throw new IolAuthError(
+      `La conexión con IOL venció: ${err instanceof Error ? err.message : String(err)}`,
+    )
   }
 
   await db.from('iol_credentials').upsert({
@@ -144,12 +175,13 @@ export async function getAccessToken(db: SupabaseClient, userId: string): Promis
   return token.access_token
 }
 
-function loginWithPassword(): Promise<TokenResponse> {
-  const username = Deno.env.get('IOL_USERNAME')
-  const password = Deno.env.get('IOL_PASSWORD')
-  if (!username || !password) {
-    throw new IolAuthError('Faltan los secrets IOL_USERNAME / IOL_PASSWORD')
-  }
+/**
+ * Canjea usuario y contraseña por tokens.
+ *
+ * La usa `connect-broker` y NADIE más: la contraseña llega en la request, se
+ * usa una vez y se descarta. Nunca se guarda ni se lee de una env var.
+ */
+export function exchangePassword(username: string, password: string): Promise<TokenResponse> {
   return requestToken({ username, password, grant_type: 'password' })
 }
 

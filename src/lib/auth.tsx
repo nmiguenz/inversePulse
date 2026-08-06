@@ -38,7 +38,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       async signInWithEmail(email) {
         const { error } = await supabase.auth.signInWithOtp({
           email,
-          options: { emailRedirectTo: `${window.location.origin}/` },
+          options: {
+            emailRedirectTo: `${window.location.origin}/`,
+            // El alta queda cerrada mientras las credenciales de IOL sean
+            // globales. Con el alta abierta, cualquiera que pidiera un magic
+            // link entraba, y el sync —que no le encontraba credenciales
+            // propias— le copiaba la cartera del dueño adentro de su cuenta.
+            // Se vuelve a abrir cuando cada uno pueda conectar la suya.
+            shouldCreateUser: false,
+          },
         })
         if (error) throw error
       },

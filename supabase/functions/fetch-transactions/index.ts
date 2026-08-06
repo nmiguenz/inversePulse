@@ -25,7 +25,7 @@
  * intenta ser honesto.
  */
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
-import { getAccessToken, iol, type IolOperacion } from '../_shared/iol.ts'
+import { getAccessToken, iol, NoConnectionError, type IolOperacion } from '../_shared/iol.ts'
 import { isServiceRole, unauthorized } from '../_shared/auth.ts'
 
 const db = createClient(

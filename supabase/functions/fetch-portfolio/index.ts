@@ -7,10 +7,11 @@
  * 4. Guarda el cierre del día en `price_history` (para los sparklines)
  * 5. Guarda el snapshot diario en `portfolio_snapshots`
  *
- * Requiere secrets: IOL_USERNAME, IOL_PASSWORD, SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY
+ * Cada usuario sincroniza con SU propia conexión de IOL. Quien no tenga una
+ * conectada se saltea: no hay credenciales globales de respaldo.
  */
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
-import { getAccessToken, iol, type IolActivo } from '../_shared/iol.ts'
+import { getAccessToken, iol, NoConnectionError, type IolActivo } from '../_shared/iol.ts'
 import { isServiceRole, unauthorized } from '../_shared/auth.ts'
 import {
   previousClose,
@@ -197,6 +198,12 @@ Deno.serve(async (req) => {
     try {
       results[user.id] = await syncUser(user.id)
     } catch (err) {
+      // Todavía no conectó su cuenta: no es un error del sistema, es alguien a
+      // mitad de la configuración. Se saltea sin ensuciar los logs.
+      if (err instanceof NoConnectionError) {
+        results[user.id] = { skipped: 'sin cuenta de IOL conectada' }
+        continue
+      }
       const message = err instanceof Error ? err.message : String(err)
       results[user.id] = { error: message }
       await db
