@@ -8,7 +8,7 @@
  * análisis, volver a preguntar cuesta plata y devuelve lo mismo.
  */
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
-import { isServiceRole, unauthorized } from '../_shared/auth.ts'
+import { isServiceRole, unauthorized, userIdFromJwt } from '../_shared/auth.ts'
 import { advise, OPPORTUNITY_MODEL, type Recommendation } from '../_shared/claude.ts'
 import { sendPush } from '../_shared/push.ts'
 
@@ -19,6 +19,13 @@ const db = createClient(
 )
 
 const MIN_NEW_NEWS = 3
+/**
+ * Mínimo entre dos análisis pedidos a mano.
+ *
+ * Cada uno es una request a Opus. Sin freno, tocar el botón repetido cuesta
+ * plata y devuelve casi lo mismo: la cartera no cambia en cinco minutos.
+ */
+const ON_DEMAND_COOLDOWN_MINUTES = 45
 const NEWS_CONTEXT = 12
 /** Solo alta convicción notifica, y con tope: no queremos empujar a sobre-operar. */
 const MAX_PUSH_PER_RUN = 2
@@ -32,7 +39,13 @@ function trend(prices: number[]): string {
 }
 
 Deno.serve(async (req) => {
-  if (!isServiceRole(req)) return unauthorized()
+  // Dos caminos: el cron con la service role key, y el botón de la app con el
+  // JWT del usuario. El segundo existe para que "¿en qué lo pongo?" pueda
+  // pedir un análisis en el momento en vez de mostrar que no hay ninguno.
+  const fromCron = isServiceRole(req)
+  const callerId = fromCron ? null : userIdFromJwt(req)
+  if (!fromCron && !callerId) return unauthorized()
+
   if (!Deno.env.get('ANTHROPIC_API_KEY')) {
     return Response.json({ error: 'Falta el secret ANTHROPIC_API_KEY' }, { status: 500 })
   }
@@ -47,11 +60,40 @@ Deno.serve(async (req) => {
     )
   }
 
-  const force = new URL(req.url).searchParams.get('force') === 'true'
-  const { data: users } = await db.from('users').select('id, settings, push_subscription')
+  // Pedido a mano: se saltea el corte por noticias nuevas, porque el usuario
+  // está preguntando ahora y "no hay noticias" no es una respuesta útil
+  const force = callerId !== null || new URL(req.url).searchParams.get('force') === 'true'
+
+  // Un pedido a mano analiza solo al que pregunta; el cron, a todos
+  const usersQuery = db.from('users').select('id, settings, push_subscription')
+  const { data: users } = await (callerId ? usersQuery.eq('id', callerId) : usersQuery)
+
   const results: Record<string, unknown> = {}
 
   for (const user of users ?? []) {
+    // ---------- Freno de costo del camino a pedido ----------
+    if (callerId) {
+      const { data: recent } = await db
+        .from('recommendations')
+        .select('created_at')
+        .eq('user_id', user.id)
+        .is('goal_id', null)
+        .order('created_at', { ascending: false })
+        .limit(1)
+        .maybeSingle()
+
+      if (recent?.created_at) {
+        const elapsed = Date.now() - new Date(recent.created_at).getTime()
+        if (elapsed < ON_DEMAND_COOLDOWN_MINUTES * 60_000) {
+          const wait = Math.ceil((ON_DEMAND_COOLDOWN_MINUTES * 60_000 - elapsed) / 60_000)
+          return Response.json(
+            { error: `El asesor analizó hace poco. Probá de nuevo en ${wait} minutos.` },
+            { status: 429 },
+          )
+        }
+      }
+    }
+
     // ---------- Corte antes de gastar ----------
     const { data: last } = await db
       .from('recommendations')
@@ -145,7 +187,12 @@ Deno.serve(async (req) => {
     const sameDayFunds = positions
       .filter((p) => cashEquivalents.has(p.symbol))
       .reduce((sum, p) => sum + valueOf(p), 0)
-    const liquidityFloor = availableCash + sameDayFunds
+
+    // Lo líquido de hoy, y el piso que hay que MANTENER. No son lo mismo:
+    // igualarlos —como hacía la 0016— dejaba cero margen para rotar y la
+    // instrucción de rotar a crecimiento nunca podía ejecutarse.
+    const liquidNow = availableCash + sameDayFunds
+    const liquidityFloor = totalValue * ((settings.liquidity_floor_pct ?? 15) / 100)
 
     let analysis
     try {
@@ -189,6 +236,7 @@ Deno.serve(async (req) => {
           pct: totalValue > 0 ? (v / totalValue) * 100 : 0,
         })),
         liquidityFloor,
+        liquidNow,
       })
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err)

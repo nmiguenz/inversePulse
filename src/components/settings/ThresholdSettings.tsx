@@ -13,6 +13,7 @@ type Settings = {
   trailing_stop_pct: number
   trailing_min_gain_pct: number
   rebuy_watch_pct: number
+  liquidity_floor_pct: number
   risk_profile: 'agresivo' | 'moderado'
   monitoring_start: string
   monitoring_end: string
@@ -60,6 +61,15 @@ const SLIDERS: SliderDef[] = [
     max: 40,
     step: 5,
     format: (v) => (v === 0 ? 'apagado' : `−${v}%`),
+  },
+  {
+    key: 'liquidity_floor_pct',
+    label: 'Reserva líquida mínima',
+    hint: 'Parte de la cartera que queda en efectivo y money market. Lo que sobre, el asesor puede rotarlo a crecimiento.',
+    min: 0,
+    max: 50,
+    step: 5,
+    format: (v) => `${v}% de la cartera`,
   },
   {
     key: 'take_profit_pct',

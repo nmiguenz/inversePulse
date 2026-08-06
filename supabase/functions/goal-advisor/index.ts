@@ -146,9 +146,10 @@ async function buildAdvisorContext(userId: string): Promise<AdvisorContext | nul
       value: v,
       pct: totalValue > 0 ? (v / totalValue) * 100 : 0,
     })),
-    // Efectivo más lo que rescata en el día: es lo que financia las metas con
-    // fecha cercana, así que no se puede proponer tocarlo
-    liquidityFloor: availableCash + sameDayFunds,
+    // Reserva a mantener, no el saldo de hoy: lo que exceda el piso se puede
+    // rotar a crecimiento
+    liquidityFloor: totalValue * ((settings.liquidity_floor_pct ?? 15) / 100),
+    liquidNow: availableCash + sameDayFunds,
   }
 }
 

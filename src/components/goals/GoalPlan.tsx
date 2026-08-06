@@ -3,6 +3,7 @@ import { RecommendationCard } from '@/components/opportunities/RecommendationCar
 import { supabase } from '@/lib/supabase'
 import { useAuth } from '@/lib/auth'
 import { formatRelativeTime } from '@/lib/format'
+import { invokeFunction } from '@/lib/functions'
 import type { Recommendation } from '@/lib/types'
 
 /**
@@ -47,14 +48,9 @@ export function GoalPlan({
     setError('')
 
     try {
-      // Se llama con el JWT del usuario, no con la service role key: esta
-      // función es la única que se dispara desde la app y no solo desde el cron
-      const { data, error: fnError } = await supabase.functions.invoke('goal-advisor', {
-        body: { goal_id: goalId },
-      })
-      if (fnError) throw fnError
-      if (data?.error) throw new Error(data.error)
-
+      // Se llama con el JWT del usuario, no con la service role key: estas
+      // funciones son las que se disparan desde la app y no solo desde el cron
+      await invokeFunction('goal-advisor', { goal_id: goalId })
       await load()
       onGenerated()
     } catch (err) {

@@ -7,6 +7,7 @@ import { useAuth } from '@/lib/auth'
 import { useMarketMovers } from '@/hooks/useMarketMovers'
 import { uniqueChannelName } from '@/lib/realtime'
 import { formatPct } from '@/lib/format'
+import { ADVISOR_HOURS_LABEL } from '@/lib/schedule'
 import type { Recommendation } from '@/lib/types'
 
 export function Opportunities() {
@@ -108,7 +109,7 @@ export function Opportunities() {
         <EmptyState
           icon="🧭"
           title="Sin recomendaciones vigentes"
-          description="El asesor analiza dos veces por día y solo guarda acciones con fundamento. Que no haya nada acá significa que hoy no vio motivo para mover plata — eso también es información."
+          description={`El asesor analiza a las ${ADVISOR_HOURS_LABEL}, de lunes a viernes, y solo guarda acciones con fundamento. Que no haya nada acá significa que no vio motivo para mover plata — eso también es información.`}
         />
       ) : (
         <div>

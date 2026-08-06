@@ -182,13 +182,16 @@ export type AdvisorContext = {
    */
   typeWeights?: Array<{ type: string; pct: number; value: number }>
   /**
-   * Piso de liquidez que NO se puede tocar, en pesos.
+   * Reserva líquida mínima a MANTENER, en pesos.
    *
-   * Los FCI T+0 son lo que hace que "si necesitás efectivo" funcione y lo que
-   * financia las metas con fecha cercana. Sin este límite, un asesor
-   * instruido para buscar crecimiento propondría vaciarlos.
+   * No es el saldo actual congelado: es el piso por debajo del cual no puede
+   * quedar la suma de efectivo y money market. La diferencia importa — cuando
+   * el piso se calculaba como "todo lo líquido de hoy", nunca sobraba nada y
+   * la rotación a crecimiento no podía ejecutarse nunca.
    */
   liquidityFloor?: number
+  /** Cuánto hay líquido hoy, para que se vea cuánto sobra por encima del piso */
+  liquidNow?: number
 }
 
 function advisorSchema(symbols: string[]) {
@@ -269,10 +272,11 @@ export async function advise(ctx: AdvisorContext): Promise<{
     'counterpart_symbol correspondiente. No lo propongas por reflejo — solo si el activo de',
     'destino tiene una tesis concreta.',
     '',
-    'PERO respetá el piso de liquidez que te paso. Esa plata NO se toca: es lo que permite',
-    'salir rápido si hace falta efectivo y lo que financia las metas con fecha cercana.',
-    'Quedarse sin liquidez obliga a vender en el peor momento, que es cómo se pierde plata',
-    'incluso teniendo razón sobre las empresas.',
+    'PERO la liquidez no puede quedar por debajo del piso que te paso. Ese piso es una',
+    'RESERVA A MANTENER, no el saldo de hoy: lo que exceda el piso sí se puede rotar, y de',
+    'hecho es la plata con la que se hace crecer la cartera. Quedarse por debajo obliga a',
+    'vender en el peor momento, que es cómo se pierde plata incluso teniendo razón sobre',
+    'las empresas.',
     '',
     'En el reasoning incluí siempre qué te haría cambiar de opinión. Una tesis sin',
     'condición de salida no es una tesis.',
@@ -294,7 +298,10 @@ export async function advise(ctx: AdvisorContext): Promise<{
       ? `COMPOSICIÓN POR TIPO: ${ctx.typeWeights.map((t) => `${t.type} ${t.pct.toFixed(0)}% (${fmtArs(t.value)})`).join(' · ')}`
       : '',
     ctx.liquidityFloor
-      ? `PISO DE LIQUIDEZ INTOCABLE: ${fmtArs(ctx.liquidityFloor)} entre efectivo y FCI T+0`
+      ? `LIQUIDEZ — tenés ${fmtArs(ctx.liquidNow ?? 0)} entre efectivo y money market. ` +
+        `El piso a mantener es ${fmtArs(ctx.liquidityFloor)}, así que hay ` +
+        `${fmtArs(Math.max(0, (ctx.liquidNow ?? 0) - ctx.liquidityFloor))} disponibles para rotar ` +
+        `a crecimiento sin bajar del piso.`
       : '',
     `UMBRALES DEL USUARIO: máx ${ctx.settings.rebalance_pct}% por activo, máx ${ctx.settings.sector_concentration_pct}% por sector`,
     '',

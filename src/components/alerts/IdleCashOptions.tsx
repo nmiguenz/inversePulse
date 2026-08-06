@@ -3,6 +3,8 @@ import { AssetLogo } from '@/components/ui/AssetLogo'
 import { supabase } from '@/lib/supabase'
 import { useAuth } from '@/lib/auth'
 import { formatARS, formatPct, toneOf, toneText } from '@/lib/format'
+import { ADVISOR_HOURS_LABEL } from '@/lib/schedule'
+import { invokeFunction } from '@/lib/functions'
 import type { MarketQuote, Recommendation } from '@/lib/types'
 
 type CashFund = {
@@ -39,6 +41,8 @@ export function IdleCashOptions() {
   const [recs, setRecs] = useState<Recommendation[]>([])
   const [cash, setCash] = useState(0)
   const [loading, setLoading] = useState(true)
+  const [asking, setAsking] = useState(false)
+  const [askError, setAskError] = useState('')
 
   const load = useCallback(async () => {
     if (!session) return
@@ -102,6 +106,26 @@ export function IdleCashOptions() {
   useEffect(() => {
     void load()
   }, [load])
+
+  /**
+   * Le pide al asesor que mire la cartera ahora.
+   *
+   * Sin esto, abrir "¿en qué lo pongo?" fuera de los horarios del cron mostraba
+   * que no había sugerencias y ahí terminaba — que es justo lo contrario de lo
+   * que la pantalla promete.
+   */
+  async function ask() {
+    setAsking(true)
+    setAskError('')
+    try {
+      await invokeFunction('portfolio-advisor')
+      await load()
+    } catch (err) {
+      setAskError(err instanceof Error ? err.message : 'No se pudo consultar al asesor')
+    } finally {
+      setAsking(false)
+    }
+  }
 
   if (loading) return <div className="bg-elevated mt-3 h-24 animate-pulse rounded-xl" />
 
@@ -170,10 +194,26 @@ export function IdleCashOptions() {
           </ul>
         ) : (
           <p className="text-muted mt-1 text-[11px] leading-relaxed">
-            No hay sugerencias vigentes. El asesor analiza dos veces por día y solo guarda algo
-            cuando ve fundamento — que no haya nada también es información.
+            No hay sugerencias vigentes. El asesor analiza a las {ADVISOR_HOURS_LABEL}, de lunes a
+            viernes — pero podés pedirle que mire ahora.
           </p>
         )}
+
+        {askError && <p className="text-loss mt-2 text-[11px] leading-relaxed">{askError}</p>}
+
+        <button
+          type="button"
+          onClick={() => void ask()}
+          disabled={asking}
+          className="border-accent text-accent active:bg-hover mt-2.5 w-full rounded-xl border py-2 text-[12px] font-medium disabled:opacity-50"
+        >
+          {asking
+            ? 'Analizando tu cartera…'
+            : recs.length
+              ? 'Pedirle un análisis nuevo'
+              : 'Preguntarle al asesor ahora'}
+        </button>
+
         <p className="text-muted mt-1.5 text-[11px] leading-relaxed">
           Esto sí son estimaciones de una IA, no hechos. Verificá antes de operar.
         </p>
