@@ -61,7 +61,9 @@ export function BrokerConnection() {
           </p>
           <p className="text-muted mt-0.5 text-[11px] leading-relaxed">
             {connected
-              ? 'La app sincroniza tus posiciones y movimientos cada 5 minutos en horario de mercado.'
+              ? iolStatus?.account_label
+                ? `${iolStatus.account_label} · sincroniza cada 5 minutos en horario de mercado.`
+                : 'La app sincroniza tus posiciones y movimientos cada 5 minutos en horario de mercado.'
               : 'Sin conectar, el dashboard queda vacío: los datos salen de tu cuenta.'}
           </p>
         </div>

@@ -109,10 +109,13 @@ Deno.serve(async (req) => {
   // pedirlas hace falta el token de ALGUIEN. Se usa la primera conexión activa
   // que haya, no `users[0]`: con varios usuarios, ese primero puede ser alguien
   // que nunca conectó nada, y la corrida entera fallaba.
+  // Se busca por la columna CIFRADA además de la vieja: desde la 0019 el token
+  // en claro queda en NULL, así que filtrar solo por `refresh_token` no
+  // encontraba ninguna conexión y los paneles de mercado se quedaban vacíos.
   const { data: connected } = await db
     .from('iol_credentials')
-    .select('user_id')
-    .not('refresh_token', 'is', null)
+    .select('user_id, refresh_token, refresh_token_enc')
+    .or('refresh_token_enc.not.is.null,refresh_token.not.is.null')
     .order('last_sync_at', { ascending: false, nullsFirst: false })
     .limit(1)
 

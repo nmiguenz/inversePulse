@@ -177,6 +177,10 @@ export type Alert = {
 
 export type IolStatus = {
   is_connected: boolean
+  broker: string | null
+  /** El usuario de IOL, para poder mostrar QUÉ cuenta quedó conectada */
+  account_label: string | null
+  connected_at: string | null
   last_sync_at: string | null
   last_sync_error: string | null
 }
