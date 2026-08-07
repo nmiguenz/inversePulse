@@ -1,4 +1,5 @@
 import { createContext, createElement, useContext, useMemo, useState, type ReactNode } from 'react'
+import { areAmountsHidden } from '@/lib/format'
 
 export type Currency = 'ARS' | 'USD'
 
@@ -55,6 +56,9 @@ export function CurrencyProvider({ mep, children }: { mep: number | null; childr
         setCurrencyState(c)
       },
       format: (ars, withCents = false) => {
+        // El modo privado también tapa acá: si no, el total en dólares seguiría
+        // a la vista con el ojo cerrado
+        if (areAmountsHidden()) return '***'
         if (active === 'USD' && canSwitch) return `US$ ${usdFmt.format(ars / mep!)}`
         return (withCents ? arsCents : arsFmt).format(ars)
       },

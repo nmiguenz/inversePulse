@@ -1,3 +1,25 @@
+/**
+ * Modo privado: los montos se muestran como ***
+ *
+ * El estado vive acá, a nivel de módulo, y no en un contexto de React, para
+ * que TODOS los montos se oculten con un solo cambio. Un ojo que tapa el total
+ * pero deja ver las posiciones no oculta nada — y estas funciones son puras y
+ * se usan desde ~30 lugares, así que pasarles una prop por todos lados era
+ * garantía de olvidarse alguno.
+ *
+ * `PrivacyProvider` es el que fuerza el re-render cuando esto cambia.
+ */
+const MASK = '***'
+let amountsHidden = false
+
+export function setAmountsHidden(value: boolean) {
+  amountsHidden = value
+}
+
+export function areAmountsHidden(): boolean {
+  return amountsHidden
+}
+
 const ars = new Intl.NumberFormat('es-AR', {
   style: 'currency',
   currency: 'ARS',
@@ -18,17 +40,20 @@ const compact = new Intl.NumberFormat('es-AR', {
 
 /** $7.296.070 */
 export function formatARS(value: number, withCents = false): string {
+  if (amountsHidden) return MASK
   return (withCents ? arsCents : ars).format(value)
 }
 
 /** +$46.244 / -$86.000 — siempre con signo */
 export function formatSignedARS(value: number, withCents = false): string {
+  if (amountsHidden) return MASK
   const sign = value > 0 ? '+' : value < 0 ? '-' : ''
   return `${sign}${formatARS(Math.abs(value), withCents)}`
 }
 
 /** $1,6M — para tablas densas */
 export function formatCompactARS(value: number): string {
+  if (amountsHidden) return MASK
   return `$${compact.format(value)}`
 }
 

@@ -140,9 +140,28 @@ async function syncUser(userId: string) {
       ? Math.max(...saldos.map((s) => s.disponibleOperar ?? 0))
       : (cuentaArs?.disponible ?? 0)
 
+  /**
+   * El efectivo disponible sale de la SUMA de `disponible` por plazo, no de
+   * `cuenta.disponible`.
+   *
+   * `cuenta.disponible` resta lo comprometido de TODOS los plazos contra el
+   * saldo de contado inmediato, y da negativo apenas hay órdenes puestas a 24h.
+   * Con datos reales: saldo t0 $374.518,56 menos $479.369,12 comprometidos
+   * (de los cuales $231.250,72 son a t1) daba **−$104.850,56**, un número que
+   * la propia app de IOL no muestra en ninguna pantalla — ahí dice
+   * "Tu disponible total: $126.400,16", que es la suma de los `disponible`.
+   *
+   * Ojo con la diferencia: `disponible` SÍ es aditivo entre plazos (cada fila
+   * trae lo suyo), a diferencia de `disponibleOperar`, que repite el mismo
+   * monto en todas las filas.
+   */
+  const available = saldos.length
+    ? saldos.reduce((sum, s) => sum + (s.disponible ?? 0), 0)
+    : (cuentaArs?.disponible ?? 0)
+
   const balance = {
     user_id: userId,
-    available_ars: cuentaArs?.disponible ?? 0,
+    available_ars: available,
     available_to_trade_ars: availableToTrade,
     settlement_breakdown: saldos.length ? saldos : null,
     committed_ars: cuentaArs?.comprometido ?? 0,
@@ -170,7 +189,11 @@ async function syncUser(userId: string) {
       cedears_value: byType('CEDEAR'),
       fci_value: byType('FCI'),
       bonds_value: byType('BONO'),
-      cash_value: cuentaArs?.disponible ?? 0,
+      // El mismo `available` de arriba, no `cuenta.disponible`: un efectivo
+      // negativo acá se propaga al rendimiento del período (que lo suma al
+      // valor de la cartera) y a la detección de aportes por diferencia de
+      // saldo, que lo compara contra el día anterior.
+      cash_value: available,
       snapshot_date: today,
     },
     { onConflict: 'user_id,snapshot_date' },

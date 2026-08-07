@@ -7,6 +7,7 @@ import { useAlerts } from "@/hooks/useAlerts";
 import { useEarningsCheck } from "@/hooks/useEarningsCheck";
 import { usePortfolio } from "@/hooks/usePortfolio";
 import { CurrencyProvider } from "@/lib/currency";
+import { PrivacyProvider } from "@/lib/privacy";
 
 const titles: Record<string, { title: string; subtitle?: string }> = {
   "/": { title: "Inverse Pulse", subtitle: "Cartera en vivo" },
@@ -40,7 +41,8 @@ export function AppShell() {
   const mep = latestRates.get("mep")?.sell_price ?? null;
 
   return (
-    <CurrencyProvider mep={mep}>
+    <PrivacyProvider>
+      <CurrencyProvider mep={mep}>
       <div className="bg-base min-h-dvh lg:pl-56">
         <Sidebar alertCount={alertCount} />
         <ScrollToTop />
@@ -65,5 +67,6 @@ export function AppShell() {
         <BottomNav alertCount={alertCount} />
       </div>
     </CurrencyProvider>
+    </PrivacyProvider>
   );
 }

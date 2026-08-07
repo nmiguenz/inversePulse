@@ -11,6 +11,7 @@ import { NextAction } from '@/components/dashboard/NextAction'
 import { CashCard } from '@/components/dashboard/CashCard'
 import { TypeFilter } from '@/components/dashboard/TypeFilter'
 import { useCurrency } from '@/lib/currency'
+import { usePrivacy } from '@/lib/privacy'
 import { usePortfolio } from '@/hooks/usePortfolio'
 import { usePullToRefresh } from '@/hooks/usePullToRefresh'
 import { PullIndicator } from '@/components/ui/PullIndicator'
@@ -42,6 +43,7 @@ export function Dashboard() {
   const [showAllSell, setShowAllSell] = useState(false)
   const [typeFilter, setTypeFilter] = useState<string | null>(null)
   const { format, currency, setCurrency, canSwitch, mep } = useCurrency()
+  const { hidden, toggle: togglePrivacy } = usePrivacy()
 
   // El total y la variación del día siempre son de la cartera COMPLETA: filtrar
   // no puede hacerte perder de vista cuánto tenés. Lo que se filtra es el donut
@@ -127,14 +129,27 @@ export function Dashboard() {
       )}
 
       {/* ── Columna izquierda: el resumen y lo accionable ──────────────
-          En escritorio queda pegada arriba mientras el resto scrollea, así el
-          total y la próxima acción no se pierden al mirar las posiciones. */}
-      <div className="contents lg:sticky lg:top-24 lg:block lg:space-y-4">
+          NO va sticky. Lo probé y estaba mal: esta columna es más alta que la
+          pantalla, y un elemento sticky más alto que el viewport se traba —
+          nunca llegás a ver su parte de abajo por más que scrollees. Que
+          scrollee normal es peor para "no perder de vista el total" y mucho
+          mejor para poder leerla entera. */}
+      <div className="contents lg:block lg:space-y-4">
 
       {/* Total de cartera — el número grande manda, todo lo demás lo acompaña */}
       <Card className="py-7 text-center">
         <div className="flex items-center justify-center gap-2">
           <p className="text-secondary text-[13px]">Total en tu cartera</p>
+          {/* Oculta TODOS los montos de la app, no solo este */}
+          <button
+            type="button"
+            onClick={togglePrivacy}
+            aria-label={hidden ? 'Mostrar montos' : 'Ocultar montos'}
+            aria-pressed={hidden}
+            className="text-muted active:text-primary px-1 text-[15px] leading-none"
+          >
+            {hidden ? '🙈' : '👁'}
+          </button>
           {canSwitch && (
             <button
               type="button"

@@ -165,31 +165,75 @@ export async function getAccessToken(db: SupabaseClient, userId: string): Promis
 
   let token: TokenResponse
   try {
-    token = await requestToken({
-      refresh_token: refreshToken,
-      grant_type: 'refresh_token',
-    })
+    token = await requestToken({ refresh_token: refreshToken, grant_type: 'refresh_token' })
   } catch (err) {
-    // El refresh token murió: hay que reconectar desde la app. Se deja
-    // registrado para que el frontend muestre el cartel en vez de fallar en
-    // silencio hasta que alguien mire los logs.
+    /**
+     * Un 401 acá NO significa que la conexión murió.
+     *
+     * IOL ROTA el refresh token en cada uso, y tres funciones piden token por
+     * separado (fetch-portfolio, fetch-transactions, fetch-market-quotes). Si
+     * dos coinciden con el access token vencido, las dos leen el mismo refresh
+     * token: la primera lo canjea y lo rota, y la segunda recibe 401 con un
+     * token que acaba de dejar de existir hace medio segundo.
+     *
+     * La versión anterior de esto borraba las credenciales en ese caso. Pasó
+     * de verdad: la cuenta recién conectada se desconectó sola una hora
+     * después, y recuperarla exige volver a escribir la contraseña — o sea que
+     * el "manejo de errores" era más destructivo que el error.
+     *
+     * Ahora se relee la fila: si otro proceso rotó el token, se reintenta con
+     * el nuevo. Y si de verdad falla, se deja el registro pero NO se borra
+     * nada: un token que no anda no molesta, y borrarlo cierra la única puerta
+     * de recuperación automática.
+     */
+    const { data: fresh } = await db
+      .from('iol_credentials')
+      .select('refresh_token, refresh_token_enc')
+      .eq('user_id', userId)
+      .maybeSingle()
+
+    const rotated = await decryptOrPlain(fresh?.refresh_token_enc ?? fresh?.refresh_token ?? null)
+
+    if (rotated && rotated !== refreshToken) {
+      try {
+        // Se asigna y se sigue de largo, para que caiga en el guardado de
+        // abajo: devolverlo acá dejaría sin persistir la rotación y el próximo
+        // sync volvería a fallar igual.
+        token = await requestToken({ refresh_token: rotated, grant_type: 'refresh_token' })
+        return await persist(db, userId, token)
+      } catch {
+        // Cae al registro de abajo
+      }
+    }
+
     await db
       .from('iol_credentials')
       .update({
-        refresh_token: null,
-        access_token: null,
-        refresh_token_enc: null,
-        access_token_enc: null,
-        last_sync_error: 'La conexión con IOL venció. Volvé a conectar tu cuenta.',
+        last_sync_error:
+          'IOL rechazó la renovación de la sesión. Si sigue pasando, reconectá tu cuenta.',
         updated_at: new Date().toISOString(),
       })
       .eq('user_id', userId)
 
     throw new IolAuthError(
-      `La conexión con IOL venció: ${err instanceof Error ? err.message : String(err)}`,
+      `No se pudo renovar la sesión de IOL: ${err instanceof Error ? err.message : String(err)}`,
     )
   }
 
+  return await persist(db, userId, token)
+}
+
+/**
+ * Guarda los tokens nuevos y devuelve el access token.
+ *
+ * Guardar la rotación es obligatorio: IOL invalida el refresh token viejo en
+ * cuanto entrega uno nuevo, así que perder el nuevo deja la conexión muerta.
+ */
+async function persist(
+  db: SupabaseClient,
+  userId: string,
+  token: TokenResponse,
+): Promise<string> {
   const expiresAt = new Date(Date.now() + token.expires_in * 1000).toISOString()
 
   const { error: saveError } = await db.from('iol_credentials').upsert({
@@ -204,9 +248,8 @@ export async function getAccessToken(db: SupabaseClient, userId: string): Promis
     updated_at: new Date().toISOString(),
   })
 
-  // Mismo caso que el select: antes de la 0019 las columnas cifradas no
-  // existen. Se guarda como antes para no perder el refresh token rotado —
-  // perderlo obligaría a reconectar a mano.
+  // Antes de la 0019 las columnas cifradas no existen. Se guarda como antes
+  // para no perder el refresh token rotado.
   if (saveError) {
     await db.from('iol_credentials').upsert({
       user_id: userId,
