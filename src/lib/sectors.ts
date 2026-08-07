@@ -25,6 +25,10 @@ export const SECTOR_COLORS: Record<string, string> = {
   Energía: '#c98500',
   Defensivo: '#d55181',
   Liquidez: '#008300',
+  // Las acciones argentinas se agrupan por país y no por industria: lo que las
+  // mueve juntas es el riesgo argentino, así que el límite de concentración por
+  // sector pasa a medir cuánto de la cartera depende del país.
+  Argentina: '#7b5cd6',
   Otros: '#9085e9',
 }
 

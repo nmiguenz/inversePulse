@@ -102,7 +102,128 @@ async function weeklyChange(symbols: string[], current: Map<string, number>) {
   return out
 }
 
+/**
+ * Suma al universo las acciones argentinas del panel Merval.
+ *
+ * ── Por qué solo el Merval ───────────────────────────────────────────────
+ *
+ * Del universo que expone IOL, las 20 acciones del panel líder son las únicas
+ * con volumen suficiente para que una sugerencia sea ejecutable. El panel de
+ * obligaciones negociables trae 883 papeles, la mayoría casi sin operar: una
+ * recomendación de comprar algo que no tiene contraparte es peor que ninguna.
+ *
+ * ── Por qué el sector es "Argentina" ─────────────────────────────────────
+ *
+ * No porque no se sepa a qué rubro pertenece cada una, sino porque para una
+ * cartera como esta el factor que las mueve juntas es el riesgo argentino, no
+ * la industria. Agrupadas así, el límite de concentración por sector pasa a
+ * medir algo útil: cuánto de la cartera depende del país.
+ *
+ * Los símbolos y descripciones salen del panel real de IOL, no de una lista
+ * cargada a mano — que es exactamente el error que hizo que un fondo de
+ * commodities figurara como money market durante semanas.
+ */
+async function syncMervalUniverse(token: string) {
+  type Panel = { simbolo?: string; descripcion?: string; volumen?: number }
+
+  // IOL devuelve el panel envuelto en `{ titulos: [...] }`, no como array
+  // plano. La sonda normalizaba las dos formas y esa normalización no llegó
+  // acá: el primer intento reventó con "filter is not a function".
+  let panel: Panel[] = []
+  try {
+    const raw = await iol.raw.get<Panel[] | { titulos?: Panel[] }>(
+      token,
+      '/api/v2/Cotizaciones/acciones/merval/argentina',
+    )
+    panel = Array.isArray(raw) ? raw : (raw?.titulos ?? [])
+  } catch (err) {
+    console.error('[universe] no se pudo leer el panel Merval:', err)
+    return { added: 0 }
+  }
+
+  const rows = panel
+    .filter((p) => p.simbolo)
+    .map((p) => ({
+      symbol: p.simbolo!,
+      sector: 'Argentina',
+      asset_type: 'ACCION',
+      rescue_time: 'T+1',
+      display_name: p.descripcion ?? p.simbolo!,
+      suggestable: true,
+    }))
+
+  if (!rows.length) return { added: 0 }
+
+  // onConflict sin pisar lo curado: si un símbolo ya está con su sector y
+  // nombre, se deja como está
+  const { error } = await db
+    .from('asset_metadata')
+    .upsert(rows, { onConflict: 'symbol', ignoreDuplicates: true })
+
+  if (error) {
+    console.error('[universe] no se pudo guardar el panel:', error.message)
+    return { added: 0 }
+  }
+
+  return { added: rows.length }
+}
+
+/**
+ * Sonda de paneles: qué instrumentos ofrece IOL además de CEDEARs y FCI.
+ *
+ * No escribe nada. Sirve para descubrir el universo REAL en vez de cargar
+ * tickers de memoria, que ya nos costó caro con los nombres de los fondos.
+ */
+async function probePanels(token: string) {
+  const candidates = [
+    '/api/v2/Cotizaciones/acciones/merval/argentina',
+    '/api/v2/Cotizaciones/titulosPublicos/todos/argentina',
+    '/api/v2/Cotizaciones/obligacionesNegociables/todas/argentina',
+    '/api/v2/Cotizaciones/cedears/todos/argentina',
+    '/api/v2/argentina/Titulos/Cotizacion/Instrumentos',
+    '/api/v2/argentina/Titulos/Cotizacion/Paneles/acciones',
+  ]
+
+  const out: Array<Record<string, unknown>> = []
+
+  for (const path of candidates) {
+    try {
+      const data = await iol.raw.get<unknown>(token, path)
+      const list = Array.isArray(data)
+        ? data
+        : Array.isArray((data as { titulos?: unknown[] })?.titulos)
+          ? (data as { titulos: unknown[] }).titulos
+          : null
+
+      out.push({
+        path,
+        ok: true,
+        count: list ? list.length : 'no es lista',
+        sample: list ? list.slice(0, 2) : data,
+      })
+    } catch (err) {
+      const raw = err instanceof Error ? err.message : String(err)
+      out.push({ path, ok: false, status: raw.match(/→ (\d{3})/)?.[1] ?? '?' })
+    }
+  }
+
+  return out
+}
+
 Deno.serve(async (req) => {
+  // Sin este envoltorio, cualquier `throw` de acá adentro sale como un 500 con
+  // el cuerpo "Internal Server Error" y cero información. Diagnosticar eso
+  // requiere leer los logs de la plataforma, que la CLI ni siquiera expone.
+  try {
+    return await handle(req)
+  } catch (err) {
+    const message = err instanceof Error ? err.message : JSON.stringify(err)
+    console.error('[fetch-market-quotes]', message)
+    return Response.json({ ok: false, error: message }, { status: 500 })
+  }
+})
+
+async function handle(req: Request): Promise<Response> {
   if (!isServiceRole(req)) return unauthorized()
 
   // Las cotizaciones son datos públicos y se comparten entre todos, pero para
@@ -124,6 +245,16 @@ Deno.serve(async (req) => {
     return Response.json({ ok: true, skipped: 'ninguna cuenta de IOL conectada' })
   }
 
+  const token = await getAccessToken(db, userId)
+
+  if (new URL(req.url).searchParams.get('probe') === 'panels') {
+    return Response.json({ ok: true, panels: await probePanels(token) })
+  }
+
+  // El universo se refresca ANTES de leerlo, no después: al revés, los símbolos
+  // nuevos recién se cotizaban en la corrida siguiente.
+  const universeSync = await syncMervalUniverse(token)
+
   const [{ data: universe }, { data: held }] = await Promise.all([
     db.from('asset_metadata').select('symbol').eq('suggestable', true),
     db.from('positions').select('symbol'),
@@ -133,8 +264,6 @@ Deno.serve(async (req) => {
     ...new Set([...(universe ?? []), ...(held ?? [])].map((r) => r.symbol)),
   ]
   if (!symbols.length) return Response.json({ ok: true, note: 'universo vacío' })
-
-  const token = await getAccessToken(db, userId)
 
   // De a tandas: 40 llamadas simultáneas hacen que IOL empiece a rechazar.
   // `allSettled` para que un símbolo sin CEDEAR no tumbe toda la corrida.
@@ -188,6 +317,7 @@ Deno.serve(async (req) => {
     ok: true,
     quoted: quotes.length,
     withWeekly: weekly.size,
+    universe: universeSync,
     failed,
   })
-})
+}

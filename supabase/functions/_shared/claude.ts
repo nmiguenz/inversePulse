@@ -218,7 +218,11 @@ export type AdvisorContext = {
   liquidNow?: number
 }
 
-function advisorSchema(symbols: string[]) {
+/**
+ * @param symbols  Universo completo: de dónde puede salir el activo a COMPRAR.
+ * @param held     Lo que el usuario tiene HOY: lo único de donde puede salir plata.
+ */
+function advisorSchema(symbols: string[], held: string[] = []) {
   return {
     type: 'object',
     properties: {
@@ -230,9 +234,22 @@ function advisorSchema(symbols: string[]) {
             action: { type: 'string', enum: ['buy', 'add', 'trim', 'sell', 'rebalance', 'hold'] },
             // enum cerrado: la API impide que sugiera un ticker que no se puede operar
             symbol: { type: 'string', enum: symbols },
+            /**
+             * Acotado a lo que el usuario TIENE, no al universo.
+             *
+             * Con el universo entero el modelo sugirió "Vendé $500.000 de PG"
+             * sobre una cartera sin una sola acción de PG — y su propio texto
+             * hablaba de vender FCI, así que ni siquiera coincidía con lo que
+             * había razonado. No se puede vender lo que no se tiene, y eso lo
+             * garantiza el enum, no una instrucción del prompt.
+             */
             counterpart_symbol: {
-              anyOf: [{ type: 'string', enum: symbols }, { type: 'null' }],
-              description: 'Solo en rebalance: de qué activo sale la plata',
+              anyOf: [
+                ...(held.length ? [{ type: 'string', enum: held }] : []),
+                { type: 'null' },
+              ],
+              description:
+                'Solo en rebalance: de qué activo EN CARTERA sale la plata. Nunca uno que no se tenga.',
             },
             title: { type: 'string', description: 'Una línea, accionable' },
             reasoning: {
@@ -291,7 +308,10 @@ export async function advise(
     '',
     'ROTACIONES Y REBALANCEOS — SIEMPRE CON LAS DOS PATAS:',
     'Un "rebalance" sin decir de dónde sale la plata es inaccionable. En cada uno:',
-    '- `counterpart_symbol` OBLIGATORIO: el activo del que se vende.',
+    '- `counterpart_symbol` OBLIGATORIO, y tiene que ser un activo que el usuario TENGA HOY,',
+    '  de la lista CARTERA. No se puede vender lo que no se tiene. Si querés salir de "los FCI",',
+    '  elegí el SÍMBOLO concreto del fondo que aparece en la cartera, no la categoría.',
+    '- El monto no puede superar lo que vale esa posición.',
     '- `suggested_amount_ars` OBLIGATORIO: cuánto se mueve, en pesos.',
     '- El `title` tiene que decir las dos patas en imperativo y con el monto, del estilo',
     '  "Vendé $220.000 de AMD y comprá GLD". Nada de "rebalancear la cartera".',
@@ -324,6 +344,7 @@ export async function advise(
 
   const user = [
     `CARTERA — total ${fmtArs(ctx.totalValue)}, efectivo disponible ${fmtArs(ctx.availableCash)}`,
+    'Estos son los ÚNICOS activos de los que podés sacar plata en una rotación:',
     positionLines || '(sin posiciones)',
     '',
     `CONCENTRACIÓN POR SECTOR: ${ctx.sectorWeights.map((s) => `${s.sector} ${s.pct.toFixed(0)}%`).join(' · ')}`,
@@ -358,7 +379,13 @@ export async function advise(
     max_tokens: 8000,
     output_config: {
       effort: 'medium',
-      format: { type: 'json_schema', schema: advisorSchema(ctx.universe.map((u) => u.symbol)) },
+      format: {
+        type: 'json_schema',
+        schema: advisorSchema(
+          ctx.universe.map((u) => u.symbol),
+          ctx.positions.map((p) => p.symbol),
+        ),
+      },
     },
     system,
     messages: [{ role: 'user', content: user }],
@@ -377,7 +404,19 @@ export async function advise(
   const parsed = JSON.parse(text.text) as { recommendations: Recommendation[] }
   console.log(`[claude] asesor · in ${usage.input} / out ${usage.output} tokens`)
 
-  return { recommendations: (parsed.recommendations ?? []).slice(0, 3), usage }
+  // Red de seguridad además del enum: una rotación desde un activo que no está
+  // en cartera es inejecutable, y mostrarla es peor que no mostrar nada.
+  const held = new Set(ctx.positions.map((p) => p.symbol))
+  const usable = (parsed.recommendations ?? []).filter((r) => {
+    if (r.action !== 'rebalance') return true
+    if (r.counterpart_symbol && held.has(r.counterpart_symbol)) return true
+    console.warn(
+      `[claude] descartada: rebalance ${r.symbol} desde "${r.counterpart_symbol}", que no está en cartera`,
+    )
+    return false
+  })
+
+  return { recommendations: usable.slice(0, 3), usage }
 }
 
 // ============================================================

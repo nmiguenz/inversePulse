@@ -340,6 +340,9 @@ export const iol = {
       `/api/v2/${mercado}/Titulos/${simbolo}/Cotizacion?model.mercado=${mercado}&model.simbolo=${simbolo}&model.plazo=${plazo}`,
     ),
 
+  /** Acceso crudo, para sondear rutas todavía no confirmadas */
+  raw: { get },
+
   // NO hay endpoint de movimientos de dinero (depósitos y extracciones).
   // Probé /cuentas-bancarias/movimientos en GET y POST con cuatro bodies,
   // /estadocuenta/movimientos, /micuenta/movimientos y /Cuenta/Movimientos:

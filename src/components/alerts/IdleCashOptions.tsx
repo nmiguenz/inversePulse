@@ -3,7 +3,7 @@ import { AssetLogo } from '@/components/ui/AssetLogo'
 import { supabase } from '@/lib/supabase'
 import { useAuth } from '@/lib/auth'
 import { formatARS, formatPct, toneOf, toneText } from '@/lib/format'
-import { ADVISOR_HOURS_LABEL } from '@/lib/schedule'
+import { advisorHoursLabel } from '@/lib/schedule'
 import { invokeFunction } from '@/lib/functions'
 import type { MarketQuote, Recommendation } from '@/lib/types'
 
@@ -194,7 +194,7 @@ export function IdleCashOptions() {
           </ul>
         ) : (
           <p className="text-muted mt-1 text-[11px] leading-relaxed">
-            No hay sugerencias vigentes. El asesor analiza a las {ADVISOR_HOURS_LABEL}, de lunes a
+            No hay sugerencias vigentes. El asesor analiza a las {advisorHoursLabel()}, de lunes a
             viernes — pero podés pedirle que mire ahora.
           </p>
         )}

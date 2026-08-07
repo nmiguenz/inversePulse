@@ -7,7 +7,8 @@ import { useAuth } from '@/lib/auth'
 import { useMarketMovers } from '@/hooks/useMarketMovers'
 import { uniqueChannelName } from '@/lib/realtime'
 import { formatPct } from '@/lib/format'
-import { ADVISOR_HOURS_LABEL } from '@/lib/schedule'
+import { advisorHoursLabel } from '@/lib/schedule'
+import { ScheduleStrip } from '@/components/opportunities/ScheduleStrip'
 import { byImportance } from '@/lib/recommendations'
 import type { Recommendation } from '@/lib/types'
 
@@ -93,6 +94,10 @@ export function Opportunities() {
 
   return (
     <div className="animate-fade-up space-y-4">
+      {/* Arriba de todo, pegado al título de la pantalla: cuándo se renueva
+          esto. En verde lo que falta correr hoy, en gris lo que ya pasó. */}
+      <ScheduleStrip />
+
       {track && (
         <Card>
           <div className="flex items-baseline justify-between">
@@ -118,7 +123,7 @@ export function Opportunities() {
         <EmptyState
           icon="🧭"
           title="Sin recomendaciones vigentes"
-          description={`El asesor analiza a las ${ADVISOR_HOURS_LABEL}, de lunes a viernes, y solo guarda acciones con fundamento. Que no haya nada acá significa que no vio motivo para mover plata — eso también es información.`}
+          description={`El asesor analiza a las ${advisorHoursLabel()}, de lunes a viernes, y solo guarda acciones con fundamento. Que no haya nada acá significa que no vio motivo para mover plata — eso también es información.`}
         />
       ) : (
         <div>
@@ -223,11 +228,8 @@ export function Opportunities() {
         </details>
       )}
 
-      {/* Los horarios van fijos y no solo en el estado vacío: saber cuándo se
-          renueva el análisis es igual de útil cuando ya hay sugerencias. */}
       <p className="text-muted text-center text-[11px] leading-relaxed">
-        El asesor analiza a las <strong className="text-secondary">{ADVISOR_HOURS_LABEL}</strong>,
-        de lunes a viernes. Las sugerencias que ya ejecutaste desaparecen solas.
+        Las sugerencias que ya ejecutaste desaparecen solas.
         <br />
         Análisis generado por IA a partir de tu cartera y las noticias.
         <br />
