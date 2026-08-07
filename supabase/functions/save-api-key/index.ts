@@ -72,8 +72,22 @@ Deno.serve(async (req) => {
   if (!apiKey) return jsonWithCors({ error: 'Falta la API key' }, { status: 400 })
 
   if (!apiKey.startsWith('sk-ant-')) {
+    // El prefijo delata de quién es la key, así que se puede decir algo mejor
+    // que "formato inválido": el usuario probablemente pegó la de otro
+    // proveedor sin saber que esta app no los soporta.
+    const from = apiKey.startsWith('sk-proj-') || apiKey.startsWith('sk-')
+      ? 'Esa parece una key de OpenAI. '
+      : apiKey.startsWith('AIza')
+        ? 'Esa parece una key de Google Gemini. '
+        : ''
+
     return jsonWithCors(
-      { error: 'Las keys de Anthropic empiezan con "sk-ant-". Revisá que hayas copiado la correcta.' },
+      {
+        error:
+          `${from}Esta app funciona solo con Claude (Anthropic): las keys empiezan con ` +
+          `"sk-ant-" y se crean en platform.claude.com. Tocá el ícono de información para ver ` +
+          `los pasos.`,
+      },
       { status: 400 },
     )
   }

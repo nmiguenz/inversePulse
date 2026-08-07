@@ -72,7 +72,7 @@ export function Settings() {
       </div>
 
       <div>
-        <SectionTitle icon="🤖">Tu cuenta de IA</SectionTitle>
+        <SectionTitle icon="🤖">Tu API key de Claude</SectionTitle>
         <Card>
           <ApiKeySettings />
         </Card>

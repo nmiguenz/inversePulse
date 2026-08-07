@@ -90,3 +90,14 @@ export function IconEyeOff(props: IconProps) {
     </svg>
   )
 }
+
+/** Información: abre las instrucciones */
+export function IconInfo(props: IconProps) {
+  return (
+    <svg {...base} {...props}>
+      <circle cx="12" cy="12" r="9" />
+      <path d="M12 16.5v-5" />
+      <path d="M12 7.9h.01" />
+    </svg>
+  )
+}
