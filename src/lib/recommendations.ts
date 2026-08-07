@@ -32,6 +32,24 @@ const ACTION_RANK: Record<string, number> = {
   hold: 5,
 }
 
+/**
+ * Descarta rotaciones desde activos que no están en cartera.
+ *
+ * Es la última línea de defensa, y existe porque el error ya ocurrió: el asesor
+ * sugirió "Vendé $500.000 de PG" y "Vendé $450.000 de PEP" sobre una cartera
+ * que no tenía ninguno de los dos. La causa estaba en el schema —el enum de la
+ * contraparte era el universo entero y no las posiciones— y ya se corrigió,
+ * pero las recomendaciones viejas siguen en la base y una regla de negocio de
+ * este tipo no puede depender de un solo control.
+ *
+ * No se puede vender lo que no se tiene: una sugerencia así es inejecutable, y
+ * mostrarla hace dudar de todas las demás.
+ */
+export function isExecutable(rec: Recommendation, held: Set<string>): boolean {
+  if (rec.action !== 'rebalance') return true
+  return !!rec.counterpart_symbol && held.has(rec.counterpart_symbol)
+}
+
 export function importanceRank(rec: Recommendation): number {
   const confidence = CONFIDENCE_RANK[rec.confidence] ?? 3
   const action = ACTION_RANK[rec.action] ?? 5
@@ -52,8 +70,10 @@ export function byImportance(a: Recommendation, b: Recommendation): number {
  * `hold` queda afuera: "no hagas nada" es información valiosa, pero no es algo
  * para destacar arriba del Dashboard como si hubiera que actuar.
  */
-export function topAction(recs: Recommendation[]): Recommendation | null {
-  const actionable = recs.filter((r) => r.action !== 'hold' && !r.fulfilled_at)
+export function topAction(recs: Recommendation[], held: Set<string>): Recommendation | null {
+  const actionable = recs.filter(
+    (r) => r.action !== 'hold' && !r.fulfilled_at && isExecutable(r, held),
+  )
   if (!actionable.length) return null
   return [...actionable].sort(byImportance)[0]
 }

@@ -6,6 +6,7 @@ import { uniqueChannelName } from '@/lib/realtime'
 import { AssetLogo } from '@/components/ui/AssetLogo'
 import { formatARS } from '@/lib/format'
 import { topAction } from '@/lib/recommendations'
+import { usePortfolio } from '@/hooks/usePortfolio'
 import type { Recommendation } from '@/lib/types'
 
 const ACTION_LABEL: Record<string, string> = {
@@ -26,6 +27,7 @@ const ACTION_LABEL: Record<string, string> = {
 export function NextAction() {
   const navigate = useNavigate()
   const { session } = useAuth()
+  const { positions } = usePortfolio()
   const [rec, setRec] = useState<Recommendation | null>(null)
   const [loading, setLoading] = useState(true)
   // Nombre único: Oportunidades también escucha `recommendations`, y supabase-js
@@ -49,14 +51,20 @@ export function NextAction() {
       .select('*')
       .eq('is_active', true)
       .eq('confidence', 'high')
+      // Solo las generales: las de meta se muestran dentro de su meta, y acá
+      // aparecerían sin decir a cuál pertenecen
+      .is('goal_id', null)
       // `fulfilled_at` se filtra en `topAction` y no acá: hasta que corra la
       // 0021 la columna no existe, y pedirla en la consulta la haría fallar
       // entera
       .limit(20)
 
-    setRec(topAction((data ?? []) as Recommendation[]))
+    // Se le pasa lo que hay en cartera para que descarte rotaciones desde
+    // activos que no tenés: destacarlas arriba de todo sería lo peor, porque
+    // es lo primero que se lee
+    setRec(topAction((data ?? []) as Recommendation[], new Set(positions.map((p) => p.symbol))))
     setLoading(false)
-  }, [session])
+  }, [session, positions])
 
   useEffect(() => {
     void load()

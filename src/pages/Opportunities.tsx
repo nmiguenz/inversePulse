@@ -9,7 +9,8 @@ import { uniqueChannelName } from '@/lib/realtime'
 import { formatPct } from '@/lib/format'
 import { advisorHoursLabel } from '@/lib/schedule'
 import { ScheduleStrip } from '@/components/opportunities/ScheduleStrip'
-import { byImportance } from '@/lib/recommendations'
+import { byImportance, isExecutable } from '@/lib/recommendations'
+import { usePortfolio } from '@/hooks/usePortfolio'
 import type { Recommendation } from '@/lib/types'
 
 export function Opportunities() {
@@ -19,6 +20,7 @@ export function Opportunities() {
   const [loading, setLoading] = useState(true)
   const channelName = useRef(uniqueChannelName('recommendations-feed'))
   const movers = useMarketMovers()
+  const { positions } = usePortfolio()
 
   const load = useCallback(async () => {
     if (!isSupabaseConfigured || !session) {
@@ -39,6 +41,13 @@ export function Opportunities() {
         // 0021 todavía no corrió, `fulfilled_at` no existe y PostgREST rechaza
         // el select ENTERO, dejando la pantalla vacía como si no hubiera
         // recomendaciones.
+        //
+        // Solo las generales: las de meta tienen su propio ciclo, las renueva
+        // `goal-advisor` y se muestran dentro de la meta. Sin este filtro
+        // aparecían en los dos lados a la vez, y encima parecían duplicados
+        // contradictorios: dos rotaciones a GLD con montos distintos, una
+        // general y otra de una meta.
+        .is('goal_id', null)
         .limit(20),
       // Las ya evaluadas alimentan el historial de aciertos
       supabase
@@ -49,12 +58,17 @@ export function Opportunities() {
         .limit(50),
     ])
 
+    // `isExecutable` descarta rotaciones desde activos que no tenés: el enum ya
+    // lo impide para las nuevas, pero las viejas siguen en la base
+    const held = new Set(positions.map((p) => p.symbol))
     setActive(
-      ((current.data ?? []) as Recommendation[]).filter((r) => !r.fulfilled_at).sort(byImportance),
+      ((current.data ?? []) as Recommendation[])
+        .filter((r) => !r.fulfilled_at && isExecutable(r, held))
+        .sort(byImportance),
     )
     setPast((evaluated.data ?? []) as Recommendation[])
     setLoading(false)
-  }, [session])
+  }, [session, positions])
 
   useEffect(() => {
     void load()
