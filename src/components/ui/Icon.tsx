@@ -68,3 +68,25 @@ export function IconChevronRight(props: IconProps) {
     </svg>
   )
 }
+
+/** Ojo abierto: los montos se ven */
+export function IconEye(props: IconProps) {
+  return (
+    <svg {...base} {...props}>
+      <path d="M2.5 12S6 5.5 12 5.5 21.5 12 21.5 12 18 18.5 12 18.5 2.5 12 2.5 12Z" />
+      <circle cx="12" cy="12" r="3" />
+    </svg>
+  )
+}
+
+/** Ojo tachado: los montos están ocultos */
+export function IconEyeOff(props: IconProps) {
+  return (
+    <svg {...base} {...props}>
+      <path d="M10.6 6.1A9.9 9.9 0 0 1 12 6c6 0 9.5 6 9.5 6a17 17 0 0 1-2.8 3.4" />
+      <path d="M6.7 7.7A17 17 0 0 0 2.5 12S6 18 12 18a9.6 9.6 0 0 0 4-.85" />
+      <path d="M9.9 9.9a3 3 0 0 0 4.2 4.2" />
+      <path d="m3 3 18 18" />
+    </svg>
+  )
+}

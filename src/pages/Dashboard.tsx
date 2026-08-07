@@ -16,7 +16,7 @@ import { usePortfolio } from '@/hooks/usePortfolio'
 import { usePullToRefresh } from '@/hooks/usePullToRefresh'
 import { PullIndicator } from '@/components/ui/PullIndicator'
 import { AssetLogo } from '@/components/ui/AssetLogo'
-import { IconChevronRight } from '@/components/ui/Icon'
+import { IconChevronRight, IconEye, IconEyeOff } from '@/components/ui/Icon'
 import { dayChange, sectorBreakdown, sellRanking, totalGain, totalValue, typeBreakdown, worstPosition } from '@/lib/portfolio'
 import { formatARS, formatCompactARS, formatPct, formatSignedARS, toneOf, toneText } from '@/lib/format'
 import { RESCUE_LABEL } from '@/lib/sectors'
@@ -140,15 +140,22 @@ export function Dashboard() {
       <Card className="py-7 text-center">
         <div className="flex items-center justify-center gap-2">
           <p className="text-secondary text-[13px]">Total en tu cartera</p>
-          {/* Oculta TODOS los montos de la app, no solo este */}
+          {/* Oculta TODOS los montos de la app, no solo este.
+              Con ícono SVG y no emoji: el emoji quedaba invisible —
+              se pinta con su propio color, ignora `text-muted`, y a 15px
+              en una tarjeta clara no se distinguía del fondo. */}
           <button
             type="button"
             onClick={togglePrivacy}
             aria-label={hidden ? 'Mostrar montos' : 'Ocultar montos'}
             aria-pressed={hidden}
-            className="text-muted active:text-primary px-1 text-[15px] leading-none"
+            className="border-line bg-elevated text-secondary active:bg-hover flex h-6 w-6 items-center justify-center rounded-full border transition-colors"
           >
-            {hidden ? '🙈' : '👁'}
+            {hidden ? (
+              <IconEyeOff width={13} height={13} />
+            ) : (
+              <IconEye width={13} height={13} />
+            )}
           </button>
           {canSwitch && (
             <button
