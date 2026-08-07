@@ -1,9 +1,11 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { supabase, isSupabaseConfigured } from '@/lib/supabase'
 import { useAuth } from '@/lib/auth'
+import { uniqueChannelName } from '@/lib/realtime'
 import { AssetLogo } from '@/components/ui/AssetLogo'
 import { formatARS } from '@/lib/format'
+import { topAction } from '@/lib/recommendations'
 import type { Recommendation } from '@/lib/types'
 
 const ACTION_LABEL: Record<string, string> = {
@@ -26,6 +28,9 @@ export function NextAction() {
   const { session } = useAuth()
   const [rec, setRec] = useState<Recommendation | null>(null)
   const [loading, setLoading] = useState(true)
+  // Nombre único: Oportunidades también escucha `recommendations`, y supabase-js
+  // reusa el canal por nombre — la segunda suscripción al mismo topic falla
+  const channelName = useRef(uniqueChannelName('next-action'))
 
   const load = useCallback(async () => {
     if (!isSupabaseConfigured || !session) {
@@ -33,23 +38,46 @@ export function NextAction() {
       return
     }
 
+    // Se traen todas las activas sin cumplir y elige `topAction`, en vez de
+    // pedirle a la base la más reciente de convicción alta. Dos motivos: el
+    // filtro `fulfilled_at` es lo que hace que desaparezca cuando ya la
+    // ejecutaste, y el orden de importancia tiene que ser el mismo que usa
+    // Oportunidades — antes acá mandaba la fecha y allá un orden alfabético
+    // roto, así que podían destacar cosas distintas.
     const { data } = await supabase
       .from('recommendations')
       .select('*')
       .eq('is_active', true)
       .eq('confidence', 'high')
-      .neq('action', 'hold')
-      .order('created_at', { ascending: false })
-      .limit(1)
-      .maybeSingle()
+      // `fulfilled_at` se filtra en `topAction` y no acá: hasta que corra la
+      // 0021 la columna no existe, y pedirla en la consulta la haría fallar
+      // entera
+      .limit(20)
 
-    setRec((data ?? null) as Recommendation | null)
+    setRec(topAction((data ?? []) as Recommendation[]))
     setLoading(false)
   }, [session])
 
   useEffect(() => {
     void load()
   }, [load])
+
+  // Sin esto la sugerencia cumplida seguiría en pantalla hasta que recargues:
+  // `fetch-transactions` la cierra del lado del servidor y acá no llegaba nada.
+  useEffect(() => {
+    if (!isSupabaseConfigured || !session) return
+    const channel = supabase
+      .channel(channelName.current)
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'recommendations' },
+        () => void load(),
+      )
+      .subscribe()
+    return () => {
+      void supabase.removeChannel(channel)
+    }
+  }, [session, load])
 
   if (loading) return <div className="card h-[104px] animate-pulse" />
 

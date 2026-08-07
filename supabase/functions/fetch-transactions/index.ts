@@ -34,8 +34,24 @@ const db = createClient(
   { auth: { persistSession: false } },
 )
 
-/** Cuántos días hacia atrás mirar en cada corrida. */
+/** Cuántos días hacia atrás mirar en la corrida diaria completa. */
 const LOOKBACK_DAYS = 120
+
+/**
+ * Ventana de la corrida encadenada desde `fetch-portfolio`, cada 5 minutos.
+ *
+ * Sin esto, una sugerencia cumplida tardaba hasta 24hs en desaparecer —el
+ * tiempo que faltara para la corrida diaria— y mientras tanto el Dashboard
+ * seguía diciéndote que compraras algo que ya habías comprado.
+ */
+const RECENT_LOOKBACK_DAYS = 7
+
+/**
+ * Qué fracción del monto sugerido cuenta como cumplida.
+ *
+ * Nadie compra el número exacto: se redondea a una cantidad entera de CEDEARs.
+ */
+const FULFILLED_THRESHOLD = 0.6
 
 /**
  * Debajo de esto, un descalce de efectivo se explica por comisiones y
@@ -166,9 +182,83 @@ async function detectUnexplainedCash(userId: string): Promise<number | null> {
   return Math.abs(residual) > CASH_NOISE_THRESHOLD ? residual : null
 }
 
-async function syncUser(userId: string) {
+/**
+ * Cierra las recomendaciones que ya ejecutaste.
+ *
+ * ── El problema que resuelve ─────────────────────────────────────────────
+ *
+ * Una recomendación quedaba activa hasta que pasaran 30 días o hasta que el
+ * asesor generara otra del mismo símbolo. Nada miraba si vos ya la habías
+ * hecho: "Comprá SPY $150 mil" seguía en el Dashboard después de comprar SPY,
+ * que es exactamente el momento en que deja de ser un consejo y pasa a ser
+ * ruido.
+ *
+ * ── El umbral ────────────────────────────────────────────────────────────
+ *
+ * Se da por cumplida al llegar al 60% del monto sugerido. Nadie compra el
+ * número exacto: se redondea a una cantidad entera de CEDEARs y queda cerca.
+ * Exigir el 100% dejaría la sugerencia colgada para siempre; aceptar cualquier
+ * operación haría que una compra de $5.000 cierre una sugerencia de $150.000.
+ *
+ * NO se toca `evaluated_at`: la recomendación se sigue juzgando a los 30 días
+ * contra el precio. Cumplida y acertada son cosas distintas, y confundirlas
+ * arruinaría el registro de aciertos.
+ */
+async function closeFulfilled(userId: string) {
+  const { data: pending, error } = await db
+    .from('recommendations')
+    .select('id, action, symbol, suggested_amount, created_at')
+    .eq('user_id', userId)
+    .eq('is_active', true)
+    .is('fulfilled_at', null)
+
+  // Antes de la 0021 las columnas no existen: no es fatal, solo no se cierra
+  if (error || !pending?.length) return 0
+
+  const closed: string[] = []
+
+  for (const rec of pending) {
+    // Qué operación cuenta como haber seguido el consejo
+    const kinds =
+      rec.action === 'sell' || rec.action === 'trim'
+        ? ['sell', 'fci_redemption']
+        : ['buy', 'fci_subscription']
+
+    const { data: trades } = await db
+      .from('transactions')
+      .select('total')
+      .eq('user_id', userId)
+      .eq('symbol', rec.symbol)
+      .in('kind', kinds)
+      .gte('executed_at', rec.created_at)
+
+    if (!trades?.length) continue
+
+    const operated = trades.reduce((sum, t) => sum + Number(t.total ?? 0), 0)
+    const target = Number(rec.suggested_amount ?? 0)
+
+    // Sin monto sugerido, cualquier operación en la dirección correcta alcanza
+    const done = target > 0 ? operated >= target * FULFILLED_THRESHOLD : operated > 0
+    if (!done) continue
+
+    await db
+      .from('recommendations')
+      .update({
+        fulfilled_at: new Date().toISOString(),
+        fulfilled_amount: operated,
+        is_active: false,
+      })
+      .eq('id', rec.id)
+
+    closed.push(`${rec.action} ${rec.symbol}`)
+  }
+
+  return closed.length
+}
+
+async function syncUser(userId: string, lookbackDays = LOOKBACK_DAYS) {
   const token = await getAccessToken(db, userId)
-  const operaciones = await iol.operaciones(token, daysAgo(LOOKBACK_DAYS), todayBA())
+  const operaciones = await iol.operaciones(token, daysAgo(lookbackDays), todayBA())
 
   const rows = (operaciones ?? [])
     .filter((op) => isSettled(op.estado) && op.numero != null)
@@ -241,11 +331,21 @@ async function syncUser(userId: string) {
     }
   }
 
-  return { operations: rows.length, unexplainedCash: residual, asked }
+  // Se cierran las sugerencias que las operaciones recién traídas demuestran
+  // que ya ejecutaste
+  const fulfilled = await closeFulfilled(userId)
+
+  return { operations: rows.length, fulfilled, unexplainedCash: residual, asked }
 }
 
 Deno.serve(async (req) => {
   if (!isServiceRole(req)) return unauthorized()
+
+  // `?recent=1` es la corrida encadenada desde fetch-portfolio, cada 5 minutos:
+  // mira solo la última semana para que una sugerencia cumplida desaparezca en
+  // minutos en vez de esperar a la corrida diaria.
+  const recent = new URL(req.url).searchParams.get('recent') === '1'
+  const lookback = recent ? RECENT_LOOKBACK_DAYS : LOOKBACK_DAYS
 
   const { data: users, error } = await db.from('users').select('id')
   if (error) return Response.json({ error: error.message }, { status: 500 })
@@ -254,8 +354,13 @@ Deno.serve(async (req) => {
 
   for (const user of users ?? []) {
     try {
-      results[user.id] = await syncUser(user.id)
+      results[user.id] = await syncUser(user.id, lookback)
     } catch (err) {
+      // Todavía no conectó su cuenta: no es un error del sistema
+      if (err instanceof NoConnectionError) {
+        results[user.id] = { skipped: 'sin cuenta de IOL conectada' }
+        continue
+      }
       const message = describe(err)
       results[user.id] = { error: message }
       console.error(`[fetch-transactions] ${user.id}:`, message)

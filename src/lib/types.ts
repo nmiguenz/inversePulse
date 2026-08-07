@@ -109,6 +109,12 @@ export type Recommendation = {
   outcome_pct: number | null
   outcome_verdict: string | null
   evaluated_at: string | null
+  /**
+   * Cuándo se detectó que la ejecutaste, cruzando contra tus operaciones.
+   * Distinto de `evaluated_at`: cumplida y acertada no son lo mismo.
+   */
+  fulfilled_at: string | null
+  fulfilled_amount: number | null
   is_active: boolean
   created_at: string
 }

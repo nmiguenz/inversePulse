@@ -28,6 +28,8 @@ type Settings = {
   trailing_stop_pct: number
   trailing_min_gain_pct: number
   rebuy_watch_pct: number
+  /** { tipo_de_alerta: fecha_hasta } — el silencio vence a propósito */
+  muted_alerts?: Record<string, string>
   monitoring_start: string
   monitoring_end: string
   notify_decisions: boolean
@@ -213,6 +215,100 @@ function evaluate(positions: Position[], availableCash: number, s: Settings): Ca
  */
 function shouldNotify(s: Settings): boolean {
   return s.notify_decisions !== false
+}
+
+// ============================================================
+// Configuración rota
+// ============================================================
+
+/**
+ * Avisa cuando la app no puede funcionar por falta de configuración.
+ *
+ * Sin conexión a IOL el dashboard se congela mostrando datos viejos, y sin API
+ * key el asesor no corre. Las dos cosas se descubrían entrando a Configuración
+ * a mirar — o sea, nunca.
+ *
+ * Estas alertas SÍ se pueden silenciar, pero por 7 días y no para siempre:
+ * apagar de forma permanente "tu cuenta está desconectada" convierte a la app
+ * en algo que dejó de sincronizar sin que nada te lo diga nunca más.
+ */
+async function evaluateSetup(
+  userId: string,
+  settings: Settings,
+): Promise<Array<Record<string, unknown>>> {
+  const muted = (settings.muted_alerts ?? {}) as Record<string, string>
+  const isMuted = (type: string) => {
+    const until = muted[type]
+    return !!until && new Date(until).getTime() > Date.now()
+  }
+
+  // Una vez por día como máximo, además del silencio explícito
+  const today = new Date().toLocaleDateString('en-CA', {
+    timeZone: 'America/Argentina/Buenos_Aires',
+  })
+  const { data: todays } = await db
+    .from('alerts')
+    .select('alert_type')
+    .eq('user_id', userId)
+    .in('alert_type', ['connection_lost', 'api_key_missing'])
+    .gte('created_at', `${today}T00:00:00-03:00`)
+
+  const alreadyToday = new Set((todays ?? []).map((a) => a.alert_type))
+  const out: Array<Record<string, unknown>> = []
+
+  // ── Conexión al broker ────────────────────────────────────────────────
+  const { data: conn } = await db
+    .from('iol_credentials')
+    .select('refresh_token, refresh_token_enc, last_sync_error')
+    .eq('user_id', userId)
+    .maybeSingle()
+
+  const connected = !!(conn?.refresh_token_enc || conn?.refresh_token)
+
+  if (!connected && !isMuted('connection_lost') && !alreadyToday.has('connection_lost')) {
+    out.push({
+      alert_type: 'connection_lost',
+      symbol: null,
+      severity: 'critical',
+      title: 'Tu cuenta de IOL no está conectada',
+      message:
+        'Sin conexión la app no puede actualizar precios, posiciones ni saldos: lo que ves es ' +
+        'la última foto que llegó a guardar. Reconectala desde Configuración.',
+      action_suggested: 'Conectar en Configuración',
+    })
+  }
+
+  // ── API key de Claude ─────────────────────────────────────────────────
+  const { data: key } = await db
+    .from('user_api_keys')
+    .select('api_key_enc, last_error')
+    .eq('user_id', userId)
+    .maybeSingle()
+
+  if (!key?.api_key_enc && !isMuted('api_key_missing') && !alreadyToday.has('api_key_missing')) {
+    out.push({
+      alert_type: 'api_key_missing',
+      symbol: null,
+      severity: 'critical',
+      title: 'Falta tu API key de Claude',
+      message:
+        'El monitoreo, las alertas y las metas funcionan igual, pero sin key no corre el asesor ' +
+        'ni el plan de metas ni el resumen de noticias. En Configuración están los pasos para ' +
+        'sacarla.',
+      action_suggested: 'Cargar la key en Configuración',
+    })
+  } else if (key?.last_error && !isMuted('api_key_invalid')) {
+    out.push({
+      alert_type: 'api_key_invalid',
+      symbol: null,
+      severity: 'critical',
+      title: 'Tu API key de Claude dejó de funcionar',
+      message: `${key.last_error} Hasta que la reemplaces, el asesor no va a correr.`,
+      action_suggested: 'Reemplazar la key en Configuración',
+    })
+  }
+
+  return out
 }
 
 // ============================================================
@@ -483,6 +579,9 @@ async function evaluateUser(user: { id: string; settings: Settings; push_subscri
   // Las de meta traen su propio dedupe: se comparan por goal_id y con ventanas
   // distintas según el tipo
   const fresh = [
+    // Las de configuración van primero: si la cuenta está desconectada, el
+    // resto de las alertas se calculó sobre datos viejos
+    ...(await evaluateSetup(user.id, settings)),
     ...candidates.filter((c) => !seen.has(`${c.alert_type}|${c.symbol ?? ''}`)),
     // La de recompra se marca en `sell_watch.alerted_at`, así que no necesita
     // el dedupe de 24hs: avisa una sola vez por venta

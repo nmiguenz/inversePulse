@@ -236,6 +236,25 @@ Deno.serve(async (req) => {
     }
   }
 
+  // Encadenar el sync de operaciones con ventana corta. Es lo que hace que una
+  // sugerencia cumplida desaparezca en minutos: si esperara a la corrida
+  // diaria, el Dashboard seguiría diciéndote que compres algo que ya compraste.
+  try {
+    const res = await fetch(
+      `${Deno.env.get('SUPABASE_URL')}/functions/v1/fetch-transactions?recent=1`,
+      {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')}`,
+          'Content-Type': 'application/json',
+        },
+      },
+    )
+    results.transactions = await res.json()
+  } catch (err) {
+    results.transactions = { error: err instanceof Error ? err.message : String(err) }
+  }
+
   // Encadenar la evaluación de alertas con los precios recién actualizados.
   // Si falla, el sync ya está guardado igual: no debe tumbar esta respuesta.
   try {

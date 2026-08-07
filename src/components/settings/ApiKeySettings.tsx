@@ -115,6 +115,12 @@ export function ApiKeySettings() {
         </div>
 
         <div className="flex shrink-0 items-center gap-2">
+          {/* Mismo indicador que la conexión de IOL: de un vistazo se ve si las
+              dos piezas de configuración están puestas */}
+          <span
+            className={`h-2 w-2 shrink-0 rounded-full ${status?.key_hint ? 'bg-gain' : 'bg-muted'}`}
+            aria-label={status?.key_hint ? 'Key configurada' : 'Sin key'}
+          />
           <button
             type="button"
             onClick={() => setShowHelp((v) => !v)}

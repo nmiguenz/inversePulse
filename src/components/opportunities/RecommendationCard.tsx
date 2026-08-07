@@ -74,18 +74,48 @@ export function RecommendationCard({ rec }: { rec: Recommendation }) {
         </button>
       )}
 
-      {rec.suggested_amount != null && (
+      {/* Una rotación se muestra con las dos patas separadas. "Rebalancear GLD
+          desde AMD" con un monto suelto no dice qué hacer: hay que leer de
+          dónde sale y hacia dónde va, cada uno con su monto. */}
+      {rec.counterpart_symbol && rec.suggested_amount != null ? (
         <div className="border-subtle mt-3 border-t pt-3">
-          <p className="text-secondary text-[12px]">Monto sugerido</p>
-          <p className="font-display tnum text-primary mt-0.5 text-[18px] font-semibold">
-            {formatARS(rec.suggested_amount)}
-            {rec.suggested_quantity ? (
-              <span className="text-muted ml-2 text-[13px] font-normal">
-                ≈ {rec.suggested_quantity} {rec.suggested_quantity === 1 ? 'CEDEAR' : 'CEDEARs'}
-              </span>
-            ) : null}
+          <div className="flex items-stretch gap-2">
+            <Leg
+              label="Vendé de"
+              symbol={rec.counterpart_symbol}
+              amount={rec.suggested_amount}
+              tone="text-loss"
+            />
+            <span className="text-muted self-center text-[16px]" aria-hidden>
+              →
+            </span>
+            <Leg
+              label="Y comprá"
+              symbol={rec.symbol}
+              amount={rec.suggested_amount}
+              quantity={rec.suggested_quantity}
+              tone="text-gain"
+            />
+          </div>
+          <p className="text-muted mt-2 text-[11px] leading-relaxed">
+            El monto es el mismo en las dos puntas: la plata sale de un activo y entra al otro,
+            sin sumar ni retirar capital.
           </p>
         </div>
+      ) : (
+        rec.suggested_amount != null && (
+          <div className="border-subtle mt-3 border-t pt-3">
+            <p className="text-secondary text-[12px]">Monto sugerido</p>
+            <p className="font-display tnum text-primary mt-0.5 text-[18px] font-semibold">
+              {formatARS(rec.suggested_amount)}
+              {rec.suggested_quantity ? (
+                <span className="text-muted ml-2 text-[13px] font-normal">
+                  ≈ {rec.suggested_quantity} {rec.suggested_quantity === 1 ? 'CEDEAR' : 'CEDEARs'}
+                </span>
+              ) : null}
+            </p>
+          </div>
+        )
       )}
 
       <footer className="mt-3 flex flex-wrap items-center gap-2">
@@ -106,5 +136,36 @@ export function RecommendationCard({ rec }: { rec: Recommendation }) {
         <span className="text-muted ml-auto text-[11px]">{formatRelativeTime(rec.created_at)}</span>
       </footer>
     </li>
+  )
+}
+
+/** Una punta de la rotación: de dónde sale o hacia dónde va. */
+function Leg({
+  label,
+  symbol,
+  amount,
+  quantity,
+  tone,
+}: {
+  label: string
+  symbol: string
+  amount: number
+  quantity?: number | null
+  tone: string
+}) {
+  return (
+    <div className="bg-elevated min-w-0 flex-1 rounded-xl px-3 py-2.5">
+      <p className={`text-[11px] font-medium ${tone}`}>{label}</p>
+      <p className="text-primary mt-0.5 flex items-center gap-1.5 text-[14px] font-semibold">
+        <AssetLogo symbol={symbol} size="sm" />
+        <span className="truncate">{symbol}</span>
+      </p>
+      <p className="tnum text-secondary mt-1 text-[12px]">{formatARS(amount)}</p>
+      {quantity ? (
+        <p className="text-muted tnum text-[11px]">
+          ≈ {quantity} {quantity === 1 ? 'CEDEAR' : 'CEDEARs'}
+        </p>
+      ) : null}
+    </div>
   )
 }

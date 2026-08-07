@@ -8,6 +8,7 @@ import { useMarketMovers } from '@/hooks/useMarketMovers'
 import { uniqueChannelName } from '@/lib/realtime'
 import { formatPct } from '@/lib/format'
 import { ADVISOR_HOURS_LABEL } from '@/lib/schedule'
+import { byImportance } from '@/lib/recommendations'
 import type { Recommendation } from '@/lib/types'
 
 export function Opportunities() {
@@ -29,8 +30,14 @@ export function Opportunities() {
         .from('recommendations')
         .select('*')
         .eq('is_active', true)
-        .order('confidence')
-        .order('created_at', { ascending: false })
+        // `.order('confidence')` ordenaba alfabéticamente sobre un TEXT: daba
+        // high, low, medium — o sea media POR DEBAJO de baja. El orden real lo
+        // pone `byImportance` abajo.
+        //
+        // Las cumplidas se filtran en el cliente y no en la consulta: si la
+        // 0021 todavía no corrió, `fulfilled_at` no existe y PostgREST rechaza
+        // el select ENTERO, dejando la pantalla vacía como si no hubiera
+        // recomendaciones.
         .limit(20),
       // Las ya evaluadas alimentan el historial de aciertos
       supabase
@@ -41,7 +48,9 @@ export function Opportunities() {
         .limit(50),
     ])
 
-    setActive((current.data ?? []) as Recommendation[])
+    setActive(
+      ((current.data ?? []) as Recommendation[]).filter((r) => !r.fulfilled_at).sort(byImportance),
+    )
     setPast((evaluated.data ?? []) as Recommendation[])
     setLoading(false)
   }, [session])
@@ -120,6 +129,7 @@ export function Opportunities() {
             <h2 className="text-primary text-[14px] font-semibold">
               {active.length === 1 ? 'Acción sugerida' : `${active.length} acciones sugeridas`}
             </h2>
+            <span className="text-muted ml-auto text-[11px]">de mayor a menor importancia</span>
           </div>
           <ul className="space-y-3">
             {active.map((rec) => (
@@ -213,7 +223,12 @@ export function Opportunities() {
         </details>
       )}
 
+      {/* Los horarios van fijos y no solo en el estado vacío: saber cuándo se
+          renueva el análisis es igual de útil cuando ya hay sugerencias. */}
       <p className="text-muted text-center text-[11px] leading-relaxed">
+        El asesor analiza a las <strong className="text-secondary">{ADVISOR_HOURS_LABEL}</strong>,
+        de lunes a viernes. Las sugerencias que ya ejecutaste desaparecen solas.
+        <br />
         Análisis generado por IA a partir de tu cartera y las noticias.
         <br />
         No es asesoramiento financiero — verificá antes de operar.

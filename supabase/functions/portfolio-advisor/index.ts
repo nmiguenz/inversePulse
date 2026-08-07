@@ -277,13 +277,33 @@ Deno.serve(async (req) => {
       return { ...r, amount, price }
     })
 
-    // Las anteriores del mismo activo quedan viejas
-    await db
+    /**
+     * El análisis nuevo REEMPLAZA al anterior completo, no solo a los símbolos
+     * que se repiten.
+     *
+     * Antes se desactivaban únicamente las del mismo símbolo, y quedaban
+     * conviviendo sugerencias de corridas distintas. Se vio en datos reales:
+     * dos rotaciones de GLD activas al mismo tiempo, una por $500.000 y otra
+     * por $138.000, cada una de una corrida diferente. Contradictorias, y sin
+     * forma de saber cuál valía.
+     *
+     * El asesor mira la cartera entera en cada corrida: si no repitió algo que
+     * había sugerido antes, es porque ya no lo sugiere. Dejarlo vivo sería
+     * inventar una recomendación que el modelo no hizo.
+     *
+     * `goal_id is null` acota a las generales: los planes de metas tienen su
+     * propio ciclo y los renueva `goal-advisor`.
+     */
+    const { error: staleError } = await db
       .from('recommendations')
       .update({ is_active: false })
       .eq('user_id', user.id)
-      .in('symbol', clean.map((r) => r.symbol))
+      .is('goal_id', null)
       .eq('is_active', true)
+
+    // Si esto falla, las viejas quedan mezcladas con las nuevas: se registra en
+    // vez de seguir como si nada, que es lo que venía pasando
+    if (staleError) console.error('[advisor] no se pudieron cerrar las anteriores:', staleError.message)
 
     const { data: inserted, error } = await db
       .from('recommendations')

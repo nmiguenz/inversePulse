@@ -25,6 +25,45 @@ type AlertsState = {
 const AlertsContext = createContext<AlertsState | null>(null)
 
 /**
+ * Qué va arriba.
+ *
+ * `idle_cash` primero de todo: mientras haya plata parada, esa es la acción
+ * pendiente más concreta que tiene el usuario — y además es la única alerta que
+ * trae su propio panel de opciones. Antes se ordenaba solo por fecha, así que
+ * cualquier alerta nueva la empujaba fuera de la vista.
+ *
+ * Después las de configuración rota (sin conexión o sin key la app no funciona
+ * y todo lo demás se calculó sobre datos viejos), después las críticas, y al
+ * final por fecha.
+ */
+const ALERT_RANK: Record<string, number> = {
+  idle_cash: 0,
+  connection_lost: 1,
+  api_key_missing: 1,
+  api_key_invalid: 1,
+  cash_flow_review: 2,
+}
+
+const SEVERITY_RANK: Record<string, number> = {
+  critical: 3,
+  warning: 4,
+  opportunity: 5,
+  info: 6,
+}
+
+function rank(alert: Alert): number {
+  return ALERT_RANK[alert.alert_type] ?? SEVERITY_RANK[alert.severity] ?? 7
+}
+
+export function sortAlerts(alerts: Alert[]): Alert[] {
+  return [...alerts].sort((a, b) => {
+    const diff = rank(a) - rank(b)
+    if (diff !== 0) return diff
+    return b.created_at.localeCompare(a.created_at)
+  })
+}
+
+/**
  * Provider único para las alertas.
  *
  * El AppShell (badge counter) y la pantalla de alertas necesitan los mismos
@@ -43,6 +82,8 @@ export function AlertsProvider({ children }: { children: ReactNode }) {
       setLoading(false)
       return
     }
+    // El orden real lo pone sortAlerts: la consulta trae por fecha y después se
+    // reordena por importancia
 
     const { data, error } = await supabase
       .from('alerts')
@@ -53,7 +94,7 @@ export function AlertsProvider({ children }: { children: ReactNode }) {
       .limit(100)
 
     if (error) console.error('[alerts] no se pudieron cargar:', error.message)
-    setAlerts((data ?? []) as Alert[])
+    setAlerts(sortAlerts((data ?? []) as Alert[]))
     setLoading(false)
   }, [userId])
 
