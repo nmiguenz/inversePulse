@@ -145,7 +145,7 @@ export function History() {
         <EmptyState
           icon="🧾"
           title="Sin operaciones registradas"
-          description="Las operaciones se sincronizan a diario desde IOL. Si acabás de conectar la cuenta, esperá al próximo sync."
+          description="Tus compras y ventas se traen de IOL una vez por día, al cierre. Si acabás de conectar la cuenta, mañana las vas a ver acá."
         />
       ) : (
         <div>

@@ -73,7 +73,7 @@ export function News() {
           description={
             tag
               ? 'Todavía no hay noticias analizadas para este tema. Probá con otro filtro.'
-              : 'El fetcher corre cada 30 minutos y solo guarda noticias que tocan alguna de tus temáticas. Si acabás de deployarlo, esperá la primera corrida.'
+              : 'Buscamos noticias cada media hora, mientras el mercado está abierto, y guardamos solo las que tocan tus temas. Si recién entrás, en un rato vas a empezar a ver.'
           }
         />
       ) : (

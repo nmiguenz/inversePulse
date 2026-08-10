@@ -81,13 +81,30 @@ export function Dashboard() {
   if (!positions.length) {
     return (
       <div className="animate-fade-up space-y-4">
+        {/* El texto que había acá hablaba de secrets y de correr una Edge
+            Function: instrucciones para quien programó la app, no para quien la
+            usa. Y no llevaba a ningún lado — había que ir a buscar Configuración
+            a mano. */}
         <EmptyState
           icon="🔌"
-          title={iolStatus?.is_connected ? 'Todavía no sincronizó' : 'Conectá tu cuenta de IOL'}
+          title={
+            iolStatus?.last_sync_error
+              ? 'Hay que reconectar tu cuenta'
+              : iolStatus?.is_connected
+                ? 'Estamos trayendo tus datos'
+                : 'Conectá tu cuenta de IOL'
+          }
           description={
             iolStatus?.last_sync_error
-              ? `Último error: ${iolStatus.last_sync_error}`
-              : 'Cargá los secrets IOL_USERNAME / IOL_PASSWORD en Supabase y corré la Edge Function fetch-portfolio. El dashboard se llena solo.'
+              ? 'IOL dejó de aceptar la sesión, así que no podemos traer tus datos. Se arregla volviendo a poner tu usuario y contraseña.'
+              : iolStatus?.is_connected
+                ? 'Tu cuenta ya está conectada. La primera sincronización puede tardar unos minutos; después se actualiza sola.'
+                : 'Con tu usuario y contraseña de IOL traemos tu cartera, tus precios y tus movimientos. Se guardan cifrados y solo los usa esta app.'
+          }
+          action={
+            iolStatus?.is_connected && !iolStatus?.last_sync_error
+              ? undefined
+              : { label: 'Conectar mi cuenta', to: '/config' }
           }
         />
         {latestRates.size > 0 && (

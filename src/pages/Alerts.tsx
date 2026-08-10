@@ -80,7 +80,7 @@ export function Alerts() {
           description={
             alerts.length
               ? 'Probá con otro filtro.'
-              : 'El motor evalúa tu cartera cada 5 minutos. Cuando alguna posición cruce un umbral, la vas a ver acá.'
+              : 'Miramos tu cartera cada 5 minutos mientras el mercado está abierto. Si algo se mueve lo suficiente como para que valga la pena avisarte, aparece acá.'
           }
         />
       ) : (

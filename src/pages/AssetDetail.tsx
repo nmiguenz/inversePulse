@@ -48,7 +48,7 @@ export function AssetDetail() {
       <EmptyState
         icon="🔍"
         title={`No tenés ${symbol}`}
-        description="Este activo no está en tu cartera, o el sync todavía no lo trajo."
+        description="Este activo no está en tu cartera. Si lo compraste recién, puede tardar unos minutos en aparecer."
       />
     )
   }
