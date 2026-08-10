@@ -23,6 +23,7 @@ import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
 import { adviseForGoal, type AdvisorContext, type GoalContext } from '../_shared/claude.ts'
 import { isServiceRole, userIdFromJwt } from '../_shared/auth.ts'
 import { getUserApiKey, markApiKeyUsed } from '../_shared/apiKey.ts'
+import { canUseAI } from '../_shared/market.ts'
 import { jsonWithCors, preflight } from '../_shared/cors.ts'
 
 const db = createClient(
@@ -279,6 +280,10 @@ Deno.serve(async (req) => {
       }
     }
 
+    const { data: me } = await db.from('users').select('settings').eq('id', userId).maybeSingle()
+    const gate = canUseAI(me?.settings as { allow_ai_after_hours?: boolean })
+    if (!gate.allowed) return jsonWithCors({ error: gate.reason }, { status: 400 })
+
     // Sin key propia no hay plan. La meta y sus escenarios siguen andando: lo
     // único que necesita IA es la sugerencia de qué comprar.
     const apiKey = await getUserApiKey(db, userId)
@@ -307,6 +312,12 @@ Deno.serve(async (req) => {
   const results: Record<string, unknown> = {}
 
   for (const user of users ?? []) {
+    const gate = canUseAI(user.settings as { allow_ai_after_hours?: boolean })
+    if (!gate.allowed) {
+      results[user.id] = { skipped: 'mercado cerrado' }
+      continue
+    }
+
     const apiKey = await getUserApiKey(db, user.id)
     if (!apiKey) {
       results[user.id] = { skipped: 'sin API key de Anthropic configurada' }

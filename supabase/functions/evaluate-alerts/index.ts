@@ -259,21 +259,37 @@ async function evaluateSetup(
   // ── Conexión al broker ────────────────────────────────────────────────
   const { data: conn } = await db
     .from('iol_credentials')
-    .select('refresh_token, refresh_token_enc, last_sync_error')
+    .select('refresh_token, refresh_token_enc, last_sync_error, last_sync_at')
     .eq('user_id', userId)
     .maybeSingle()
 
-  const connected = !!(conn?.refresh_token_enc || conn?.refresh_token)
+  const hasToken = !!(conn?.refresh_token_enc || conn?.refresh_token)
+
+  /**
+   * "Conectada" no alcanza: hay que mirar si SINCRONIZA.
+   *
+   * Cuando el refresh token se rompe, el token sigue guardado —dejamos de
+   * borrarlo a propósito— así que la condición vieja daba "conectada" y nunca
+   * avisaba. Pasó de verdad: el sync estuvo roto todo un fin de semana sin una
+   * sola alerta.
+   */
+  const lastSync = conn?.last_sync_at ? new Date(conn.last_sync_at).getTime() : 0
+  const stale = hasToken && Date.now() - lastSync > STALE_SYNC_HOURS * 3600_000
+  const connected = hasToken && !stale
 
   if (!connected && !isMuted('connection_lost') && !alreadyToday.has('connection_lost')) {
     out.push({
       alert_type: 'connection_lost',
       symbol: null,
       severity: 'critical',
-      title: 'Tu cuenta de IOL no está conectada',
-      message:
-        'Sin conexión la app no puede actualizar precios, posiciones ni saldos: lo que ves es ' +
-        'la última foto que llegó a guardar. Reconectala desde Configuración.',
+      title: hasToken
+        ? 'Tu cuenta de IOL dejó de sincronizar'
+        : 'Tu cuenta de IOL no está conectada',
+      message: hasToken
+        ? `${conn?.last_sync_error ?? 'La sesión con IOL dejó de renovarse.'} Lo que ves es la ` +
+          'última foto que llegó a guardar. Reconectá tu cuenta desde Configuración.'
+        : 'Sin conexión la app no puede actualizar precios, posiciones ni saldos: lo que ves es ' +
+          'la última foto que llegó a guardar. Conectala desde Configuración.',
       action_suggested: 'Conectar en Configuración',
     })
   }

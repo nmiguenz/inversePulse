@@ -11,8 +11,20 @@
  * 16:00" ya convertida, que era correcta solo para alguien en Buenos Aires.
  */
 
-/** portfolio-advisor — cron `0 14,19 * * 1-5` (UTC) */
-export const ADVISOR_HOURS_UTC = [14, 19] as const
+/**
+ * portfolio-advisor — cron `0 15,19 * * 1-5` (UTC)
+ *
+ * Los dos momentos están elegidos para caer dentro de la rueda en cualquier
+ * época del año:
+ *
+ * - **15:00 UTC** — hora y media después de la apertura local y ya con Wall
+ *   Street abierto incluso sin horario de verano allá. Las 14:00 que usábamos
+ *   antes caían antes de la apertura de EE.UU. medio año, con los CEDEARs
+ *   todavía sin referencia.
+ * - **19:00 UTC** — una hora antes del cierre de BYMA: se ve el movimiento del
+ *   día y todavía se puede operar.
+ */
+export const ADVISOR_HOURS_UTC = [15, 19] as const
 
 /** Los mismos horarios en la hora del dispositivo: "11:00 y 16:00" en Buenos Aires. */
 export function advisorHoursLabel(): string {

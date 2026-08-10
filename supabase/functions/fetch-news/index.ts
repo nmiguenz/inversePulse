@@ -27,7 +27,8 @@ import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
 import { isServiceRole, unauthorized } from '../_shared/auth.ts'
 import { fetchFeed, type FeedItem } from '../_shared/rss.ts'
 import { getUserApiKey } from '../_shared/apiKey.ts'
-import { analyzeNews, NEWS_MODEL, type NewsAnalysis } from '../_shared/claude.ts'
+import { canUseAI } from '../_shared/market.ts'
+import { analyzeNews, type NewsAnalysis } from '../_shared/claude.ts'
 import { sendPush } from '../_shared/push.ts'
 
 const db = createClient(
@@ -158,91 +159,154 @@ Deno.serve(async (req) => {
   stats.relevant = relevant.length
   stats.sentToClaude = toAnalyze.length
 
-  // ---------- 4. Analizar en lotes ----------
-  //
-  // Con qué key. Si no hay ninguna cargada, las noticias se guardan crudas: es
-  // mejor un feed sin resumen que un feed vacío.
-  let analysisKey: string | null = null
-  for (const u of users ?? []) {
-    analysisKey = await getUserApiKey(db, u.id)
-    if (analysisKey) break
-  }
-
-  const analyzedRows: Array<Record<string, unknown>> = []
-  const alertPayloads: Array<{ analysis: NewsAnalysis; item: FeedItem & { source: string } }> = []
   const errors: string[] = []
 
-  // Los lotes van EN PARALELO: en serie, 4 llamadas más los fetches de RSS
-  // superan el timeout de 150s de las Edge Functions y se pierde la corrida
-  // entera (incluido lo ya analizado, que igual se pagó).
-  const batches: Array<typeof toAnalyze> = []
-  for (let i = 0; i < toAnalyze.length; i += BATCH_SIZE) {
-    batches.push(toAnalyze.slice(i, i + BATCH_SIZE))
-  }
+  // ---------- 4. Guardar los artículos crudos ----------
+  //
+  // El artículo en sí sale del RSS y no cuesta nada, así que la tabla `news`
+  // sigue siendo compartida entre todos. Lo que cuesta —el resumen, el
+  // sentimiento, qué símbolos toca— se guarda aparte y por usuario.
+  const rawRows = toAnalyze.map((item) => ({
+    title: item.title,
+    source: item.source,
+    url: item.url,
+    published_at: item.publishedAt,
+  }))
 
-  const settled = analysisKey
-    ? await Promise.allSettled(
-        batches.map((batch) =>
-          analyzeNews(
-            analysisKey!,
-            batch.map((item, idx) => ({
-              index: idx,
-              title: item.title,
-              source: item.source,
-              snippet: item.snippet,
-            })),
-            topics,
-            holdings,
-          ),
-        ),
-      )
-    : []
+  let stored: Array<{ id: string; url: string }> = []
 
-  for (const [batchIndex, result] of settled.entries()) {
-    const batch = batches[batchIndex]
+  if (rawRows.length) {
+    const { data, error } = await db
+      .from('news')
+      .upsert(rawRows, { onConflict: 'url' })
+      .select('id, url')
 
-    if (result.status === 'rejected') {
-      const message =
-        result.reason instanceof Error ? result.reason.message : String(result.reason)
-      errors.push(message)
-      console.error('[fetch-news] análisis falló:', message)
-      continue
-    }
-
-    stats.analyzed += result.value.length
-
-    for (const analysis of result.value) {
-      const item = batch[analysis.index]
-      if (!item) continue
-
-      analyzedRows.push({
-        title: item.title,
-        source: item.source,
-        url: item.url,
-        summary: analysis.summary,
-        sentiment: analysis.sentiment,
-        impact_level: analysis.impact_level,
-        related_symbols: analysis.related_symbols,
-        tags: analysis.tags,
-        published_at: item.publishedAt,
-        analyzed_with: NEWS_MODEL,
-        analyzed_at: new Date().toISOString(),
-      })
-
-      if (analysis.sentiment === 'negative' && analysis.impact_level === 'high') {
-        alertPayloads.push({ analysis, item })
-      }
-    }
-  }
-
-  if (analyzedRows.length) {
-    const { error } = await db.from('news').upsert(analyzedRows, { onConflict: 'url' })
     if (error) {
       errors.push(`insert: ${error.message}`)
       console.error('[fetch-news] insert:', error.message)
     } else {
-      stats.inserted = analyzedRows.length
+      stored = data ?? []
+      stats.inserted = stored.length
     }
+  }
+
+  const byUrlStored = new Map(stored.map((r) => [r.url, r.id]))
+
+  // ---------- 4b. Analizar, cada uno con SU key ----------
+  //
+  // Antes esto corría UNA vez con la primera key disponible y el resultado se
+  // guardaba en la tabla global: el dueño de esa key pagaba el análisis de
+  // todos los usuarios.
+  //
+  // Y no es solo una cuestión de quién paga. El análisis ya dependía de la
+  // cartera —qué símbolos toca la noticia, qué tan relevante es— así que un
+  // resultado compartido estaba calculado sobre las tenencias de otro.
+  const alertsByUser = new Map<string, Array<{ analysis: NewsAnalysis; item: FeedItem & { source: string } }>>()
+
+  for (const user of users ?? []) {
+    // Fuera del horario de mercado no se gasta en IA. Los titulares ya quedaron
+    // guardados arriba, así que el feed se ve igual, sin resumen.
+    if (!canUseAI(user.settings as { allow_ai_after_hours?: boolean }).allowed) continue
+
+    const apiKey = await getUserApiKey(db, user.id)
+    if (!apiKey) continue
+
+    const userSymbols = [
+      ...new Set((positions ?? []).filter((p) => p.user_id === user.id).map((p) => p.symbol)),
+    ]
+
+    // Lo que este usuario todavía no analizó. Sin esto, cada corrida volvería a
+    // pagar por los mismos artículos.
+    const ids = [...byUrlStored.values()]
+    if (!ids.length) continue
+
+    const { data: done } = await db
+      .from('news_analysis')
+      .select('news_id')
+      .eq('user_id', user.id)
+      .in('news_id', ids)
+
+    const alreadyDone = new Set((done ?? []).map((d) => d.news_id))
+    const pending = toAnalyze.filter((item) => {
+      const id = byUrlStored.get(item.url)
+      return id && !alreadyDone.has(id)
+    })
+
+    if (!pending.length) continue
+
+    const batches: Array<typeof pending> = []
+    for (let i = 0; i < pending.length; i += BATCH_SIZE) {
+      batches.push(pending.slice(i, i + BATCH_SIZE))
+    }
+    stats.sentToClaude += pending.length
+
+    // Los lotes van EN PARALELO: en serie, 4 llamadas más los fetches de RSS
+    // superan el timeout de 150s de las Edge Functions y se pierde la corrida
+    // entera, incluido lo ya analizado, que igual se pagó.
+    const settled = await Promise.allSettled(
+      batches.map((batch) =>
+        analyzeNews(
+          apiKey,
+          batch.map((item, idx) => ({
+            index: idx,
+            title: item.title,
+            source: item.source,
+            snippet: item.snippet,
+          })),
+          topics,
+          userSymbols,
+        ),
+      ),
+    )
+
+    const rows: Array<Record<string, unknown>> = []
+    const mine: Array<{ analysis: NewsAnalysis; item: FeedItem & { source: string } }> = []
+
+    for (const [batchIndex, result] of settled.entries()) {
+      const batch = batches[batchIndex]
+
+      if (result.status === 'rejected') {
+        const message =
+          result.reason instanceof Error ? result.reason.message : String(result.reason)
+        errors.push(message)
+        console.error('[fetch-news] análisis falló:', message)
+        continue
+      }
+
+      stats.analyzed += result.value.length
+
+      for (const analysis of result.value) {
+        const item = batch[analysis.index]
+        const newsId = item && byUrlStored.get(item.url)
+        if (!item || !newsId) continue
+
+        rows.push({
+          news_id: newsId,
+          user_id: user.id,
+          summary: analysis.summary,
+          sentiment: analysis.sentiment,
+          impact_level: analysis.impact_level,
+          related_symbols: analysis.related_symbols,
+          tags: analysis.tags,
+        })
+
+        if (analysis.sentiment === 'negative' && analysis.impact_level === 'high') {
+          mine.push({ analysis, item })
+        }
+      }
+    }
+
+    if (rows.length) {
+      const { error } = await db
+        .from('news_analysis')
+        .upsert(rows, { onConflict: 'news_id,user_id' })
+      if (error) {
+        errors.push(`news_analysis: ${error.message}`)
+        console.error('[fetch-news] news_analysis:', error.message)
+      }
+    }
+
+    alertsByUser.set(user.id, mine)
   }
 
   // ---------- 5. Alertas por noticias negativas sobre activos en cartera ----------
@@ -261,7 +325,7 @@ Deno.serve(async (req) => {
 
     let sentThisRun = 0
 
-    for (const { analysis, item } of alertPayloads) {
+    for (const { analysis, item } of alertsByUser.get(user.id) ?? []) {
       // Validación contra alucinaciones: solo símbolos que el usuario realmente
       // tiene. Un ticker inventado por el modelo no puede generar una alerta.
       const hits = [...new Set(analysis.related_symbols.map((s) => s.toUpperCase()))].filter((s) =>

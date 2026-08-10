@@ -11,6 +11,7 @@ import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
 import { isServiceRole, userIdFromJwt } from '../_shared/auth.ts'
 import { advise, OPPORTUNITY_MODEL, type Recommendation } from '../_shared/claude.ts'
 import { getUserApiKey, markApiKeyUsed } from '../_shared/apiKey.ts'
+import { canUseAI } from '../_shared/market.ts'
 import { sendPush } from '../_shared/push.ts'
 import { corsHeaders, jsonWithCors, preflight } from '../_shared/cors.ts'
 
@@ -95,6 +96,16 @@ Deno.serve(async (req) => {
           )
         }
       }
+    }
+
+    // ---------- Fuera del mercado no se gasta ----------
+    // Analizar con la rueda cerrada paga tokens por una recomendación que no se
+    // puede ejecutar hasta el otro día, cuando los precios ya cambiaron.
+    const gate = canUseAI(user.settings as { allow_ai_after_hours?: boolean })
+    if (!gate.allowed) {
+      if (callerId) return jsonWithCors({ error: gate.reason }, { status: 400 })
+      results[user.id] = { skipped: 'mercado cerrado' }
+      continue
     }
 
     // ---------- Sin key propia no hay asesor ----------

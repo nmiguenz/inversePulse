@@ -20,10 +20,11 @@ type Settings = {
   notify_decisions: boolean
   notify_opportunities: boolean
   notify_news: boolean
+  allow_ai_after_hours: boolean
 }
 
 type SliderDef = {
-  key: Exclude<keyof Settings, 'risk_profile' | 'monitoring_start' | 'monitoring_end' | 'notify_decisions' | 'notify_opportunities' | 'notify_news'>
+  key: Exclude<keyof Settings, 'risk_profile' | 'monitoring_start' | 'monitoring_end' | 'notify_decisions' | 'notify_opportunities' | 'notify_news' | 'allow_ai_after_hours'>
   label: string
   hint: string
   min: number
@@ -108,6 +109,15 @@ const TOGGLES = [
     key: 'notify_news' as const,
     label: 'Noticias',
     hint: 'Noticias negativas sobre tus activos. Aparecen en Alertas igual.',
+    optIn: true,
+  },
+  {
+    key: 'allow_ai_after_hours' as const,
+    label: 'Usar IA con el mercado cerrado',
+    hint:
+      'Apagado, no se gasta en análisis fuera de la rueda (10:30 a 17:00, lunes a viernes). ' +
+      'Una recomendación de la noche se ejecuta al otro día, con otros precios.',
+    optIn: true,
   },
 ]
 
@@ -238,7 +248,7 @@ export function ThresholdSettings() {
             </span>
             <input
               type="checkbox"
-              checked={toggle.key === 'notify_news' ? settings[toggle.key] === true : settings[toggle.key] !== false}
+              checked={'optIn' in toggle ? settings[toggle.key] === true : settings[toggle.key] !== false}
               onChange={(e) => void save({ ...settings, [toggle.key]: e.target.checked })}
               className="accent-accent h-5 w-5 shrink-0"
             />
