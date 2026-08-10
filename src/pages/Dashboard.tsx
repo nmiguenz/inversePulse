@@ -20,6 +20,7 @@ import { IconChevronRight, IconEye, IconEyeOff } from '@/components/ui/Icon'
 import { dayChange, sectorBreakdown, sellRanking, totalGain, totalValue, typeBreakdown, worstPosition } from '@/lib/portfolio'
 import { formatARS, formatCompactARS, formatPct, formatSignedARS, toneOf, toneText } from '@/lib/format'
 import { RESCUE_LABEL } from '@/lib/sectors'
+import { isMarketOpenNow, marketWindowLabel } from '@/lib/schedule'
 
 /** Cuántas mostrar antes del "ver más" en el ranking de venta */
 const TOP_SELL = 5
@@ -391,15 +392,24 @@ export function Dashboard() {
 
       </div>
 
-      {iolStatus?.last_sync_at && (
-        <p className="text-muted pt-1 text-center text-[11px] lg:col-span-2">
-          Último sync{' '}
-          {new Date(iolStatus.last_sync_at).toLocaleTimeString('es-AR', {
-            hour: '2-digit',
-            minute: '2-digit',
-          })}
-        </p>
-      )}
+      {/* Cuándo se actualiza, siempre visible. Sin esto, un "último sync
+          17:03" a la noche parece un error, cuando en realidad el mercado
+          cerró y no hay nada nuevo que traer. */}
+      <p className="text-muted pt-1 text-center text-[11px] lg:col-span-2">
+        {iolStatus?.last_sync_at && (
+          <>
+            Actualizado{' '}
+            {new Date(iolStatus.last_sync_at).toLocaleTimeString(undefined, {
+              hour: '2-digit',
+              minute: '2-digit',
+            })}
+            {' · '}
+          </>
+        )}
+        {isMarketOpenNow()
+          ? `se actualiza cada 5 minutos hasta las ${marketWindowLabel().split(' a ')[1]}`
+          : `se actualiza cada 5 minutos de ${marketWindowLabel()}, lunes a viernes`}
+      </p>
     </div>
   )
 }

@@ -126,6 +126,11 @@ type Creds = {
   access_token_enc?: string | null
   access_token_expires_at?: string | null
   token_version?: number | null
+  /** El usuario de IOL. Etiqueta visible y, desde la 0025, login del rescate. */
+  account_label?: string | null
+  /** Contraseña cifrada (0025). Último recurso cuando el refresh muere. */
+  password_enc?: string | null
+  last_sync_error?: string | null
 }
 
 /** Lee la fila de credenciales, tolerando esquemas viejos. */
@@ -133,7 +138,7 @@ async function readCreds(db: SupabaseClient, userId: string): Promise<Creds | nu
   const full = await db
     .from('iol_credentials')
     .select(
-      'refresh_token, access_token, refresh_token_enc, access_token_enc, access_token_expires_at, token_version',
+      'refresh_token, access_token, refresh_token_enc, access_token_enc, access_token_expires_at, token_version, account_label, password_enc, last_sync_error',
     )
     .eq('user_id', userId)
     .maybeSingle()
@@ -213,14 +218,18 @@ export async function getAccessToken(db: SupabaseClient, userId: string): Promis
   const cached = await cachedAccessToken(creds)
   if (cached) return cached
 
-  // Sin token propio no hay sync. NO existe un login global de respaldo.
+  // Sin credenciales propias no hay sync. NO existe un login global de
+  // respaldo.
   //
   // Antes había uno, con IOL_USERNAME/IOL_PASSWORD de env, y era un agujero:
   // como el alta de usuarios estaba abierta, cualquiera que se registrara caía
   // acá sin credenciales, se usaban las globales, y la cartera del dueño
   // terminaba copiada adentro de la cuenta del desconocido.
+  //
+  // La contraseña guardada cuenta como conexión: aunque el refresh token haya
+  // muerto, con ella se puede volver a entrar.
   const refreshToken = await decryptOrPlain(creds?.refresh_token_enc ?? creds?.refresh_token ?? null)
-  if (!refreshToken) {
+  if (!refreshToken && !creds?.password_enc) {
     throw new NoConnectionError(`El usuario ${userId} no tiene una cuenta de IOL conectada`)
   }
 
@@ -239,10 +248,13 @@ export async function getAccessToken(db: SupabaseClient, userId: string): Promis
     throw new IolAuthError('Otro proceso está renovando la sesión y tardó demasiado')
   }
 
+  let locked: Creds | null = null
+  let triedPassword = false
+
   try {
     // Se relee ADENTRO del candado: entre la primera lectura y el candado, otro
     // proceso pudo haber renovado y rotado el token.
-    const locked = await readCreds(db, userId)
+    locked = await readCreds(db, userId)
 
     const fresh = await cachedAccessToken(locked)
     if (fresh) return fresh
@@ -251,28 +263,106 @@ export async function getAccessToken(db: SupabaseClient, userId: string): Promis
       (await decryptOrPlain(locked?.refresh_token_enc ?? locked?.refresh_token ?? null)) ??
       refreshToken
 
-    const token = await requestToken({ refresh_token: current, grant_type: 'refresh_token' })
+    let token: TokenResponse
+    try {
+      if (!current) throw new IolAuthError('no hay refresh token guardado')
+      token = await requestToken({ refresh_token: current, grant_type: 'refresh_token' })
+    } catch (refreshErr) {
+      // ── El rescate ─────────────────────────────────────────────────────
+      // IOL rota el refresh token en cada uso y no tiene otra puerta de
+      // entrada, así que ese token muere por cosas que no controlamos: un
+      // corte de red en plena rotación, otra aplicación entrando a IOL con
+      // las mismas credenciales. Antes cada una de esas muertes era una
+      // reconexión a mano; ahora se vuelve a entrar con la contraseña
+      // guardada (cifrada, 0025) y la sesión se recupera sola.
+      const password = await decryptOrPlain(locked?.password_enc ?? null)
+      const username = locked?.account_label
+
+      if (!password || !username) throw refreshErr
+
+      triedPassword = true
+      console.warn(
+        `[iol] refresh rechazado para ${userId}; reintentando con usuario y contraseña`,
+      )
+      token = await requestToken({ username, password, grant_type: 'password' })
+    }
+
     return await persist(db, userId, token, locked?.token_version ?? 0)
   } catch (err) {
     if (err instanceof PersistError) throw err
 
-    // NO se borran las credenciales. Un token que no anda no molesta, y
-    // borrarlo cierra la única puerta de recuperación automática: sin la
-    // contraseña —que no guardamos— habría que reconectar a mano.
+    // NO se borran las credenciales: un token muerto no molesta, y mientras
+    // esté la contraseña guardada la próxima corrida puede intentar de nuevo.
+    const message = triedPassword
+      ? 'IOL rechazó la sesión y también el usuario y contraseña guardados. Si cambiaste la contraseña, reconectá tu cuenta.'
+      : locked?.password_enc
+        ? 'No se pudo renovar la sesión de IOL. Se reintenta solo en la próxima corrida.'
+        : 'IOL rechazó la renovación de la sesión. Reconectá tu cuenta una vez para activar la recuperación automática.'
+
     await db
       .from('iol_credentials')
-      .update({
-        last_sync_error:
-          'IOL rechazó la renovación de la sesión. Si sigue pasando, reconectá tu cuenta.',
-        updated_at: new Date().toISOString(),
-      })
+      .update({ last_sync_error: message, updated_at: new Date().toISOString() })
       .eq('user_id', userId)
+
+    // Aviso inmediato, solo en la TRANSICIÓN de sana a rota y solo cuando ya
+    // no queda recuperación automática. El aviso de las 20hs de evaluate-alerts
+    // sigue existiendo como red; este existe porque enterarse un día después
+    // era perder un día de mercado.
+    if (triedPassword && !locked?.last_sync_error) {
+      await notifyConnectionDead(db, userId)
+    }
 
     throw new IolAuthError(
       `No se pudo renovar la sesión de IOL: ${err instanceof Error ? err.message : String(err)}`,
     )
   } finally {
     await releaseRefreshLock(db, userId)
+  }
+}
+
+/**
+ * Alerta + push en el momento en que la conexión queda irrecuperable.
+ *
+ * Import dinámico para no encadenar web-push a todas las funciones que solo
+ * quieren un token.
+ */
+async function notifyConnectionDead(db: SupabaseClient, userId: string) {
+  try {
+    const { data: alert } = await db
+      .from('alerts')
+      .insert({
+        user_id: userId,
+        alert_type: 'connection_lost',
+        symbol: null,
+        title: 'Tu cuenta de IOL se desconectó',
+        message:
+          'IOL rechazó la sesión y la contraseña guardada. Hasta que reconectes, los datos quedan congelados.',
+        severity: 'critical',
+        action_suggested: 'Reconectar en Configuración',
+      })
+      .select('id')
+      .maybeSingle()
+
+    const { data: user } = await db
+      .from('users')
+      .select('push_subscription')
+      .eq('id', userId)
+      .maybeSingle()
+
+    if (user?.push_subscription) {
+      const { sendPush } = await import('./push.ts')
+      await sendPush(db, userId, user.push_subscription, {
+        title: 'Tu cuenta de IOL se desconectó',
+        body: 'Hay que volver a poner usuario y contraseña. Hasta entonces, los datos quedan congelados.',
+        tag: 'connection_lost',
+        url: '/config',
+        alertId: alert?.id,
+        severity: 'critical',
+      })
+    }
+  } catch (err) {
+    // El aviso es cortesía: si falla, no tiene que tapar el error real
+    console.error(`[iol] no se pudo avisar la desconexión de ${userId}:`, err)
   }
 }
 

@@ -3,20 +3,23 @@
  *
  * Conecta la cuenta de IOL de un usuario.
  *
- * ── La contraseña no se guarda ───────────────────────────────────────────
+ * ── La contraseña se guarda cifrada ──────────────────────────────────────
  *
  * La API de IOL solo tiene login por usuario y contraseña (grant_type
  * password): no hay OAuth ni tokens de solo lectura. Así que la contraseña
- * tiene que pasar por acá una vez.
+ * tiene que pasar por acá.
  *
- * Lo que se hace con ella es lo único que se puede hacer bien: se canjea por
- * tokens y se descarta. Vive en el body de la request y en memoria durante la
- * llamada, y no se escribe en ningún lado — ni en la base, ni en los logs.
- * Lo que queda guardado es el refresh token, cifrado.
+ * Antes se canjeaba por tokens y se descartaba — el token puede operar en la
+ * cuenta, y guardar además la contraseña era acumular riesgo. Pero IOL rota
+ * el refresh token en cada uso y no tiene otra puerta de entrada: cada vez
+ * que ese token moría (un corte de red en plena rotación, otra app usando
+ * las mismas credenciales), la conexión quedaba muerta hasta reconectar a
+ * mano. Pasó tres veces en una semana y el dueño eligió disponibilidad.
  *
- * Esto importa porque el token que se obtiene **puede operar** en la cuenta:
- * la misma API tiene /operar/comprar. Guardar además la contraseña sería
- * acumular un riesgo que no hace falta correr.
+ * Ahora queda guardada CIFRADA (AES-GCM, la clave en un secret de las Edge
+ * Functions, fuera de la base) y se usa para una sola cosa: volver a entrar
+ * cuando IOL rechaza la renovación. Nunca se loguea, nunca sale por la API,
+ * y no hay policy de SELECT que permita leerla. Ver la migración 0025.
  */
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
 import { exchangePassword, IolAuthError } from '../_shared/iol.ts'
@@ -47,18 +50,38 @@ Deno.serve(async (req) => {
 
   // ── Desconectar ────────────────────────────────────────────────────────
   if (body.action === 'disconnect') {
-    const { error } = await db
+    let { error } = await db
       .from('iol_credentials')
       .update({
         refresh_token: null,
         access_token: null,
         refresh_token_enc: null,
         access_token_enc: null,
+        // Desconectar borra TODO, contraseña incluida: es la promesa de la
+        // pantalla ("podés desconectar cuando quieras y no queda nada").
+        password_enc: null,
         connected_at: null,
         last_sync_error: null,
         updated_at: new Date().toISOString(),
       })
       .eq('user_id', userId)
+
+    // Sin la 0025 no existe `password_enc`; se borra lo que sí existe
+    if (error) {
+      const legacy = await db
+        .from('iol_credentials')
+        .update({
+          refresh_token: null,
+          access_token: null,
+          refresh_token_enc: null,
+          access_token_enc: null,
+          connected_at: null,
+          last_sync_error: null,
+          updated_at: new Date().toISOString(),
+        })
+        .eq('user_id', userId)
+      error = legacy.error
+    }
 
     if (error) return jsonWithCors({ error: error.message }, { status: 500 })
     return jsonWithCors({ ok: true, connected: false })
@@ -87,21 +110,45 @@ Deno.serve(async (req) => {
     return jsonWithCors({ error: message }, { status: 400 })
   }
 
-  const { error } = await db.from('iol_credentials').upsert({
+  // Si la 0025 todavía no corrió, `password_enc` no existe y PostgREST rechaza
+  // el upsert ENTERO. Conectar sin recuperación automática sigue siendo mejor
+  // que no poder conectar.
+  let { error } = await db.from('iol_credentials').upsert({
     user_id: userId,
     broker: 'iol',
-    // El usuario se guarda solo como etiqueta, para que reconozca qué cuenta
-    // conectó. La contraseña NO se guarda en ningún campo.
+    // El usuario cumple doble función: etiqueta visible y login del rescate
     account_label: username,
     refresh_token_enc: await encrypt(token.refresh_token),
     access_token_enc: await encrypt(token.access_token),
+    // La contraseña, cifrada: el último recurso cuando IOL rechaza el refresh
+    // token. Sin esto, cada muerte del token era una reconexión a mano.
+    password_enc: await encrypt(password),
     refresh_token: null,
     access_token: null,
     access_token_expires_at: new Date(Date.now() + token.expires_in * 1000).toISOString(),
     connected_at: new Date().toISOString(),
+    // Un candado viejo no debe demorar la primera renovación de la sesión nueva
+    refresh_lock_until: null,
     last_sync_error: null,
     updated_at: new Date().toISOString(),
   })
+
+  if (error) {
+    const legacy = await db.from('iol_credentials').upsert({
+      user_id: userId,
+      broker: 'iol',
+      account_label: username,
+      refresh_token_enc: await encrypt(token.refresh_token),
+      access_token_enc: await encrypt(token.access_token),
+      refresh_token: null,
+      access_token: null,
+      access_token_expires_at: new Date(Date.now() + token.expires_in * 1000).toISOString(),
+      connected_at: new Date().toISOString(),
+      last_sync_error: null,
+      updated_at: new Date().toISOString(),
+    })
+    error = legacy.error
+  }
 
   if (error) return jsonWithCors({ error: error.message }, { status: 500 })
 

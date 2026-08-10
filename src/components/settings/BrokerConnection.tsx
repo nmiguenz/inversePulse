@@ -113,13 +113,13 @@ export function BrokerConnection() {
         <form onSubmit={connect} className="mt-3 space-y-2.5">
           <div className="bg-elevated rounded-xl px-3.5 py-3">
             <p className="text-secondary text-[12px] leading-relaxed">
-              <strong className="text-primary">Tu contraseña no se guarda.</strong> Se usa una sola
-              vez para pedirle un token a IOL y se descarta: en la base queda solo ese token,
-              cifrado.
+              <strong className="text-primary">Tus credenciales se guardan cifradas</strong> y se
+              usan para una sola cosa: mantener viva la conexión con IOL, incluso cuando IOL corta
+              la sesión. Así no tenés que volver a escribirlas cada vez.
             </p>
             <p className="text-muted mt-2 text-[11px] leading-relaxed">
-              Aun así, tenelo presente: ese token permite operar en tu cuenta, porque la API de IOL
-              no ofrece uno de solo lectura. Podés desconectarla cuando quieras.
+              Tenelo presente: la API de IOL no ofrece un acceso de solo lectura. Al desconectar
+              se borra todo, credenciales incluidas.
             </p>
           </div>
 

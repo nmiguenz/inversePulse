@@ -37,6 +37,38 @@ export function advisorHoursLabel(): string {
 }
 
 /**
+ * La ventana de sincronización: la rueda de BYMA, 13:30–20:00 UTC.
+ *
+ * Tiene que coincidir con `_shared/market.ts` del lado de las funciones y con
+ * los cron de la 0023. Fuera de esta ventana los precios no se mueven y nada
+ * sincroniza — y eso hay que DECIRLO en la pantalla: un "último sync 17:03"
+ * a las 22:00 parece un error si nadie te contó que el mercado cierra.
+ */
+export const MARKET_OPEN_UTC = { hour: 13, minute: 30 } as const
+export const MARKET_CLOSE_UTC = { hour: 20, minute: 0 } as const
+
+/** "10:30 a 17:00" en la hora del dispositivo. */
+export function marketWindowLabel(): string {
+  const fmt = (h: number, m: number) => {
+    const at = new Date()
+    at.setUTCHours(h, m, 0, 0)
+    return at.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })
+  }
+  return `${fmt(MARKET_OPEN_UTC.hour, MARKET_OPEN_UTC.minute)} a ${fmt(MARKET_CLOSE_UTC.hour, MARKET_CLOSE_UTC.minute)}`
+}
+
+/** ¿Estamos dentro de la ventana, un día hábil? Espejo de isMarketOpen del server. */
+export function isMarketOpenNow(now = new Date()): boolean {
+  const day = now.getUTCDay()
+  if (day === 0 || day === 6) return false
+  const minutes = now.getUTCHours() * 60 + now.getUTCMinutes()
+  return (
+    minutes >= MARKET_OPEN_UTC.hour * 60 + MARKET_OPEN_UTC.minute &&
+    minutes < MARKET_CLOSE_UTC.hour * 60 + MARKET_CLOSE_UTC.minute
+  )
+}
+
+/**
  * goal-advisor — cron `30 16 * * 1` (UTC), lunes
  *
  * Estaba los domingos, pero con el corte por horario de mercado esa corrida se
