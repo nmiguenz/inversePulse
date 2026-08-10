@@ -36,5 +36,10 @@ export function advisorHoursLabel(): string {
   }).join(' y ')
 }
 
-/** goal-advisor — cron `0 12 * * 0` (UTC), domingos */
-export const GOAL_ADVISOR_LABEL = 'los domingos'
+/**
+ * goal-advisor — cron `30 16 * * 1` (UTC), lunes
+ *
+ * Estaba los domingos, pero con el corte por horario de mercado esa corrida se
+ * saltea siempre. Ver la 0024.
+ */
+export const GOAL_ADVISOR_LABEL = 'los lunes'
