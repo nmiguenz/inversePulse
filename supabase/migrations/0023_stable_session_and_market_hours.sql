@@ -103,10 +103,23 @@ ALTER TABLE users ALTER COLUMN settings SET DEFAULT '{
 -- BYMA opera 10:30-17:00 hora argentina = 13:30-20:00 UTC, lunes a viernes.
 -- Argentina no tiene horario de verano, así que en UTC es fijo todo el año.
 
+-- `cron.unschedule(nombre)` aborta la migración entera si el job no existe, y
+-- no todos existen en todos los entornos. Esto lo vuelve tolerante: si no está,
+-- no hay nada que borrar. `cron.schedule` con un nombre ya usado lo pisa, así
+-- que el unschedule solo hace falta para nombres que desaparecen.
+CREATE OR REPLACE FUNCTION unschedule_if_exists(job_name TEXT)
+RETURNS VOID LANGUAGE plpgsql AS $fn$
+BEGIN
+  IF EXISTS (SELECT 1 FROM cron.job WHERE jobname = job_name) THEN
+    PERFORM cron.unschedule(job_name);
+  END IF;
+END;
+$fn$;
+
 -- fetch-portfolio: cada 5 min DENTRO de la rueda. Antes arrancaba 13:00 (media
 -- hora antes de la apertura) y seguía hasta las 21:55, dos horas después del
 -- cierre, sincronizando precios que ya no se movían.
-SELECT cron.unschedule('fetch-portfolio');
+SELECT unschedule_if_exists('fetch-portfolio');
 SELECT cron.schedule(
   'fetch-portfolio',
   '30-55/5 13 * * 1-5',
@@ -124,7 +137,7 @@ SELECT cron.schedule(
 
 -- fetch-news: de 336 corridas por semana a 65. Solo en rueda: una noticia de
 -- las 4 de la mañana del domingo no mueve ningún precio hasta el lunes.
-SELECT cron.unschedule('fetch-news');
+SELECT unschedule_if_exists('fetch-news');
 SELECT cron.schedule(
   'fetch-news',
   '*/30 14-19 * * 1-5',
@@ -142,7 +155,7 @@ SELECT cron.schedule(
 --
 --   19:00 UTC (16:00 ART) — una hora antes del cierre: se ve el movimiento del
 --   día y todavía se puede operar.
-SELECT cron.unschedule('portfolio-advisor');
+SELECT unschedule_if_exists('portfolio-advisor');
 SELECT cron.schedule(
   'portfolio-advisor',
   '0 15,19 * * 1-5',
@@ -152,7 +165,7 @@ SELECT cron.schedule(
 );
 
 -- fetch-dollar-rates: acompaña la rueda. No usa IA ni el token de IOL.
-SELECT cron.unschedule('fetch-dollar-rates');
+SELECT unschedule_if_exists('fetch-dollar-rates');
 SELECT cron.schedule(
   'fetch-dollar-rates',
   '*/10 14-19 * * 1-5',
@@ -164,7 +177,7 @@ SELECT cron.schedule(
 -- Los dos que chocaban con fetch-portfolio se corren a minutos que no comparte
 -- con nadie. El candado ya lo hace seguro, pero dos procesos peleando por el
 -- mismo token todos los días es algo que conviene no tener aunque esté cubierto.
-SELECT cron.unschedule('fetch-market-quotes');
+SELECT unschedule_if_exists('fetch-market-quotes');
 SELECT cron.schedule(
   'fetch-market-quotes',
   '17 20 * * 1-5',
@@ -173,7 +186,7 @@ SELECT cron.schedule(
        headers := cron_auth_headers(), timeout_milliseconds := 120000); $$
 );
 
-SELECT cron.unschedule('fetch-transactions');
+SELECT unschedule_if_exists('fetch-transactions');
 SELECT cron.schedule(
   'fetch-transactions',
   '37 20 * * 1-5',
