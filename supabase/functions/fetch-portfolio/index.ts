@@ -12,7 +12,8 @@
  */
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
 import { getAccessToken, iol, NoConnectionError, type IolActivo } from '../_shared/iol.ts'
-import { isServiceRole, unauthorized } from '../_shared/auth.ts'
+import { isServiceRole, unauthorized, userIdFromJwt } from '../_shared/auth.ts'
+import { jsonWithCors, preflight } from '../_shared/cors.ts'
 import {
   previousClose,
   toAssetType,
@@ -209,11 +210,21 @@ async function syncUser(userId: string) {
 }
 
 Deno.serve(async (req) => {
-  // Solo se invoca desde pg_cron / manualmente con la service role key
-  if (!isServiceRole(req)) return unauthorized()
+  const pre = preflight(req)
+  if (pre) return pre
 
-  const { data: users, error } = await db.from('users').select('id')
-  if (error) return Response.json({ error: error.message }, { status: 500 })
+  // Dos caminos: el cron con la service role key sincroniza a todos, y el
+  // pulldown de la app —con el JWT del usuario— sincroniza SOLO al que tira.
+  // Sin el segundo, "deslizá para actualizar" solo releía la base: los datos
+  // frescos de IOL llegaban recién con el próximo cron, hasta 5 minutos
+  // después, y el gesto parecía no hacer nada.
+  const fromCron = isServiceRole(req)
+  const callerId = fromCron ? null : userIdFromJwt(req)
+  if (!fromCron && !callerId) return unauthorized()
+
+  const usersQuery = db.from('users').select('id')
+  const { data: users, error } = await (callerId ? usersQuery.eq('id', callerId) : usersQuery)
+  if (error) return jsonWithCors({ error: error.message }, { status: 500 })
 
   const results: Record<string, unknown> = {}
 
@@ -235,6 +246,11 @@ Deno.serve(async (req) => {
       console.error(`[fetch-portfolio] ${user.id}:`, message)
     }
   }
+
+  // El pulldown corta acá: lo que el usuario espera del gesto son SUS
+  // posiciones y saldos frescos, y ya los tiene. Operaciones y alertas siguen
+  // llegando por el cron, que corre a los pocos minutos.
+  if (callerId) return jsonWithCors({ ok: true, results })
 
   // Encadenar el sync de operaciones con ventana corta. Es lo que hace que una
   // sugerencia cumplida desaparezca en minutos: si esperara a la corrida
@@ -270,5 +286,5 @@ Deno.serve(async (req) => {
     results.alerts = { error: err instanceof Error ? err.message : String(err) }
   }
 
-  return Response.json({ ok: true, results })
+  return jsonWithCors({ ok: true, results })
 })

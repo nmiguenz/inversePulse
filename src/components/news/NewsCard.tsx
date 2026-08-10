@@ -7,6 +7,12 @@ const SENTIMENT_STYLE: Record<Sentiment, { label: string; className: string }> =
   neutral: { label: 'Neutral', className: 'border-line bg-elevated text-secondary' },
 }
 
+/** El titular llegó por RSS pero todavía nadie lo analizó con IA. */
+const UNANALYZED = {
+  label: 'Sin analizar',
+  className: 'border-line text-muted border-dashed',
+}
+
 const IMPACT_LABEL = { high: 'Impacto alto', medium: 'Impacto medio', low: 'Impacto bajo' }
 
 const SOURCE_LABEL: Record<string, string> = {
@@ -19,7 +25,10 @@ const SOURCE_LABEL: Record<string, string> = {
 }
 
 export function NewsCard({ item, holdings }: { item: NewsItem; holdings: Set<string> }) {
-  const sentiment = SENTIMENT_STYLE[item.sentiment ?? 'neutral']
+  // "Sin analizar" NO es lo mismo que "Neutral", y confundirlos hacía que la
+  // app mintiera: cuando el análisis dejó de generarse, el feed entero se
+  // mostró como si Claude lo hubiera leído y le hubiera parecido neutro.
+  const sentiment = item.sentiment ? SENTIMENT_STYLE[item.sentiment] : UNANALYZED
   const symbols = item.related_symbols ?? []
 
   return (

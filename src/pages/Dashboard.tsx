@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useCallback, useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { Card, EmptyState, SectionTitle } from '@/components/ui/Card'
 import { MetricCard } from '@/components/ui/MetricCard'
@@ -21,6 +21,7 @@ import { dayChange, sectorBreakdown, sellRanking, totalGain, totalValue, typeBre
 import { formatARS, formatCompactARS, formatPct, formatSignedARS, toneOf, toneText } from '@/lib/format'
 import { RESCUE_LABEL } from '@/lib/sectors'
 import { isMarketOpenNow, marketWindowLabel } from '@/lib/schedule'
+import { invokeFunction } from '@/lib/functions'
 
 /** Cuántas mostrar antes del "ver más" en el ranking de venta */
 const TOP_SELL = 5
@@ -40,7 +41,20 @@ export function Dashboard() {
   const { positions, balance, latestRates, snapshots, iolStatus, loading, error, reload } =
     usePortfolio()
 
-  const { pull, refreshing, ready } = usePullToRefresh(reload)
+  // El pulldown pide un sync REAL a IOL, no una relectura de la base: si solo
+  // releyera, el gesto devolvería los mismos números hasta la próxima corrida
+  // del cron y parecería roto. Si el sync falla (sin conexión, IOL caído), la
+  // relectura igual corre y trae lo último guardado.
+  const syncAndReload = useCallback(async () => {
+    try {
+      await invokeFunction('fetch-portfolio')
+    } catch {
+      // El error de sync ya queda en iol_status; el gesto no tiene que fallar
+    }
+    await reload()
+  }, [reload])
+
+  const { pull, refreshing, ready } = usePullToRefresh(syncAndReload)
   const [showAllSell, setShowAllSell] = useState(false)
   const [typeFilter, setTypeFilter] = useState<string | null>(null)
   const { format, currency, setCurrency, canSwitch, mep } = useCurrency()

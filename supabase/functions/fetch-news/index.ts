@@ -13,15 +13,11 @@
  *
  * ── De quién es la key que analiza ──────────────────────────────────────
  *
- * El feed de noticias es COMPARTIDO: una corrida de Sonnet por lote sirve para
- * todos los usuarios, así que no tiene sentido analizarlo una vez por persona.
- * Se usa la key del primer usuario que tenga una cargada, que en la práctica es
- * la del dueño de la instancia.
- *
- * Es una asimetría explícita y acotada: el análisis de noticias es barato y no
- * escala con la cantidad de usuarios, mientras que el asesor —que es Opus y sí
- * escala— usa siempre la key de cada uno. Si no hay NINGUNA key cargada, las
- * noticias se guardan igual, sin resumen ni sentimiento.
+ * El artículo crudo es compartido (RSS, gratis); el ANÁLISIS es por usuario y
+ * con su propia key, en `news_analysis`. No es solo quién paga: el análisis
+ * depende de la cartera —qué símbolos toca, qué tan relevante es— así que uno
+ * compartido estaba calculado sobre las tenencias de otro. Quien no tiene key
+ * ve los titulares sin resumen.
  */
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
 import { isServiceRole, unauthorized } from '../_shared/auth.ts'
@@ -157,7 +153,6 @@ Deno.serve(async (req) => {
 
   const toAnalyze = relevant.slice(0, MAX_ANALYZE_PER_RUN)
   stats.relevant = relevant.length
-  stats.sentToClaude = toAnalyze.length
 
   const errors: string[] = []
 
@@ -173,8 +168,6 @@ Deno.serve(async (req) => {
     published_at: item.publishedAt,
   }))
 
-  let stored: Array<{ id: string; url: string }> = []
-
   if (rawRows.length) {
     const { data, error } = await db
       .from('news')
@@ -185,12 +178,9 @@ Deno.serve(async (req) => {
       errors.push(`insert: ${error.message}`)
       console.error('[fetch-news] insert:', error.message)
     } else {
-      stored = data ?? []
-      stats.inserted = stored.length
+      stats.inserted = (data ?? []).length
     }
   }
-
-  const byUrlStored = new Map(stored.map((r) => [r.url, r.id]))
 
   // ---------- 4b. Analizar, cada uno con SU key ----------
   //
@@ -201,7 +191,7 @@ Deno.serve(async (req) => {
   // Y no es solo una cuestión de quién paga. El análisis ya dependía de la
   // cartera —qué símbolos toca la noticia, qué tan relevante es— así que un
   // resultado compartido estaba calculado sobre las tenencias de otro.
-  const alertsByUser = new Map<string, Array<{ analysis: NewsAnalysis; item: FeedItem & { source: string } }>>()
+  const alertsByUser = new Map<string, Array<{ analysis: NewsAnalysis; item: { title: string } }>>()
 
   for (const user of users ?? []) {
     // Fuera del horario de mercado no se gasta en IA. Los titulares ya quedaron
@@ -215,22 +205,55 @@ Deno.serve(async (req) => {
       ...new Set((positions ?? []).filter((p) => p.user_id === user.id).map((p) => p.symbol)),
     ]
 
-    // Lo que este usuario todavía no analizó. Sin esto, cada corrida volvería a
-    // pagar por los mismos artículos.
-    const ids = [...byUrlStored.values()]
-    if (!ids.length) continue
+    // El pendiente sale de la BASE, no de lo que esta corrida trajo del RSS.
+    //
+    // La primera versión miraba solo los artículos recién insertados. El
+    // agujero: si una corrida fallaba a mitad del análisis —o el usuario no
+    // tenía key ese día, o el mercado estaba cerrado— esos artículos ya nunca
+    // volvían a estar "frescos" y quedaban neutrales para siempre. Pasó de
+    // verdad: el feed entero apareció sin análisis y ninguna corrida
+    // posterior lo levantaba.
+    // Se traen MUCHOS más de los que se van a analizar y el tope se aplica
+    // DESPUÉS de descartar los ya hechos. Al revés —limitar a 40 acá— el
+    // backlog nunca drenaría: con noticias entrando cada media hora, esos 40
+    // más recientes se analizan una vez y las viejas sin analizar quedan
+    // siempre fuera de la ventana.
+    const { data: backlog } = await db
+      .from('news')
+      .select('id, title, source, url')
+      .gte('created_at', new Date(Date.now() - 48 * 3600_000).toISOString())
+      .order('created_at', { ascending: false })
+      .limit(500)
 
+    if (!backlog?.length) continue
+
+    // Lo ya analizado se pide por VENTANA, no con .in(los 500 ids): 500 UUIDs
+    // son ~18KB de query string y la request falla. Es la misma trampa que ya
+    // documenta el dedupe de arriba, que se comió una vez.
     const { data: done } = await db
       .from('news_analysis')
       .select('news_id')
       .eq('user_id', user.id)
-      .in('news_id', ids)
+      .gte('created_at', new Date(Date.now() - 72 * 3600_000).toISOString())
+      .limit(2000)
 
     const alreadyDone = new Set((done ?? []).map((d) => d.news_id))
-    const pending = toAnalyze.filter((item) => {
-      const id = byUrlStored.get(item.url)
-      return id && !alreadyDone.has(id)
-    })
+
+    // El snippet solo existe para lo que trajo ESTA corrida; en el backlog va
+    // vacío y el título carga con la señal — que es lo que suele pasar en los
+    // RSS financieros de todas formas.
+    const snippetByUrl = new Map(toAnalyze.map((i) => [i.url, i.snippet]))
+
+    const pending = backlog
+      .filter((b) => !alreadyDone.has(b.id))
+      .slice(0, MAX_ANALYZE_PER_RUN)
+      .map((b) => ({
+        id: b.id,
+        title: b.title,
+        source: b.source,
+        url: b.url ?? '',
+        snippet: snippetByUrl.get(b.url ?? '') ?? '',
+      }))
 
     if (!pending.length) continue
 
@@ -260,7 +283,7 @@ Deno.serve(async (req) => {
     )
 
     const rows: Array<Record<string, unknown>> = []
-    const mine: Array<{ analysis: NewsAnalysis; item: FeedItem & { source: string } }> = []
+    const mine: Array<{ analysis: NewsAnalysis; item: { title: string } }> = []
 
     for (const [batchIndex, result] of settled.entries()) {
       const batch = batches[batchIndex]
@@ -277,11 +300,10 @@ Deno.serve(async (req) => {
 
       for (const analysis of result.value) {
         const item = batch[analysis.index]
-        const newsId = item && byUrlStored.get(item.url)
-        if (!item || !newsId) continue
+        if (!item) continue
 
         rows.push({
-          news_id: newsId,
+          news_id: item.id,
           user_id: user.id,
           summary: analysis.summary,
           sentiment: analysis.sentiment,

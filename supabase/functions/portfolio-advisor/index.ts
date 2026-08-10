@@ -4,8 +4,8 @@
  * Produce ACCIONES sobre la cartera (comprar, reducir, vender, rebalancear) y
  * las guarda con el precio del momento, para poder medir después si acertaron.
  *
- * Se saltea solo si no hay input nuevo: sin noticias nuevas desde el último
- * análisis, volver a preguntar cuesta plata y devuelve lo mismo.
+ * Corre SIEMPRE que le toca: las dos corridas diarias se muestran en la app
+ * como promesa, así que no hay cortes silenciosos por "pocas noticias".
  */
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
 import { isServiceRole, userIdFromJwt } from '../_shared/auth.ts'
@@ -21,7 +21,6 @@ const db = createClient(
   { auth: { persistSession: false } },
 )
 
-const MIN_NEW_NEWS = 3
 /**
  * Mínimo entre dos análisis pedidos a mano.
  *
@@ -63,10 +62,6 @@ Deno.serve(async (req) => {
       { status: 500 },
     )
   }
-
-  // Pedido a mano: se saltea el corte por noticias nuevas, porque el usuario
-  // está preguntando ahora y "no hay noticias" no es una respuesta útil
-  const force = callerId !== null || new URL(req.url).searchParams.get('force') === 'true'
 
   // Un pedido a mano analiza solo al que pregunta; el cron, a todos
   const usersQuery = db.from('users').select('id, settings, push_subscription')
@@ -118,25 +113,13 @@ Deno.serve(async (req) => {
       continue
     }
 
-    // ---------- Corte antes de gastar ----------
-    const { data: last } = await db
-      .from('recommendations')
-      .select('created_at')
-      .eq('user_id', user.id)
-      .order('created_at', { ascending: false })
-      .limit(1)
-      .maybeSingle()
-
-    const since = last?.created_at ?? new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString()
-    const { count: newNews } = await db
-      .from('news')
-      .select('id', { count: 'exact', head: true })
-      .gt('created_at', since)
-
-    if (!force && (newNews ?? 0) < MIN_NEW_NEWS) {
-      results[user.id] = { skipped: `${newNews ?? 0} noticias nuevas, no alcanza` }
-      continue
-    }
+    // Las dos corridas diarias son una PROMESA que la app muestra en pantalla
+    // (los horarios en verde de Oportunidades). Acá había un corte por "pocas
+    // noticias nuevas" que la rompía en silencio: la corrida de las 12:00 se
+    // salteaba y el usuario se quedaba mirando un horario en verde que nunca
+    // corrió. Los precios y la cartera cambian aunque no haya titulares, y son
+    // 2 corridas por día pagadas por el propio usuario — el corte ahorraba
+    // centavos a cambio de incumplir lo prometido.
 
     // ---------- Contexto ----------
     const [{ data: positions }, { data: balance }, { data: news }, { data: universe }, { data: history }] =
@@ -148,11 +131,15 @@ Deno.serve(async (req) => {
           )
           .eq('user_id', user.id),
         db.from('account_balance').select('available_ars, available_to_trade_ars').eq('user_id', user.id).maybeSingle(),
+        // El análisis vive en news_analysis, por usuario, desde la 0023. Leer
+        // las columnas globales de `news` acá era leer columnas muertas: el
+        // contexto de noticias llegaba vacío al modelo.
         db
-          .from('news')
-          .select('title, summary, sentiment, related_symbols')
+          .from('news_analysis')
+          .select('summary, sentiment, related_symbols, news(title)')
+          .eq('user_id', user.id)
           .in('impact_level', ['high', 'medium'])
-          .order('published_at', { ascending: false, nullsFirst: false })
+          .order('created_at', { ascending: false })
           .limit(NEWS_CONTEXT),
         db.from('asset_metadata').select('symbol, display_name, sector').eq('suggestable', true),
         db
@@ -234,7 +221,7 @@ Deno.serve(async (req) => {
         totalValue,
         availableCash,
         news: (news ?? []).map((n) => ({
-          title: n.title,
+          title: (n.news as unknown as { title: string } | null)?.title ?? '',
           summary: n.summary ?? '',
           sentiment: n.sentiment ?? 'neutral',
           symbols: n.related_symbols ?? [],
