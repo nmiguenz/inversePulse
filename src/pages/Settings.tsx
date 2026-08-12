@@ -1,7 +1,5 @@
 import { useEffect, useState } from 'react'
-import { useNavigate } from 'react-router-dom'
 import { Card, SectionTitle } from '@/components/ui/Card'
-import { IconChevronRight } from '@/components/ui/Icon'
 import { useAuth } from '@/lib/auth'
 import { currentSubscription, pushSupported, subscribeToPush, unsubscribeFromPush } from '@/lib/push'
 import { EarningsManager } from '@/components/settings/EarningsManager'
@@ -20,7 +18,6 @@ const THEME_OPTIONS: Array<{ value: ThemeChoice; label: string }> = [
 type PushState = 'checking' | 'off' | 'on' | 'busy' | 'unsupported' | 'blocked'
 
 export function Settings() {
-  const navigate = useNavigate()
   const { session, signOut } = useAuth()
   const { iolStatus } = usePortfolio()
   const [push, setPush] = useState<PushState>('checking')
@@ -152,18 +149,10 @@ export function Settings() {
 
       <div>
         <SectionTitle icon="⚙️">Más</SectionTitle>
+        {/* El acceso a Historial estaba acá y se fue al Dashboard, al lado de
+            Metas: no es un ajuste, es una vista de datos, y enterrada en
+            Configuración no la encontraba nadie desde el celular. */}
         <Card className="p-0">
-          <button
-            type="button"
-            onClick={() => navigate('/historial')}
-            className="border-subtle active:bg-hover flex w-full items-center justify-between gap-3 border-b px-4 py-3.5 text-left transition-colors"
-          >
-            <span>
-              <span className="block text-[14px]">Historial de operaciones</span>
-              <span className="text-muted mt-0.5 block text-[12px]">Ver y exportar a CSV</span>
-            </span>
-            <IconChevronRight className="text-muted shrink-0" />
-          </button>
           <div className="flex items-center justify-between gap-3 px-4 py-3.5">
             <span>
               <span className="block text-[14px]">Cuenta IOL</span>

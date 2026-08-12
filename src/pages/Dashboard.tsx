@@ -270,6 +270,29 @@ export function Dashboard() {
         <IconChevronRight className="text-muted shrink-0" />
       </button>
 
+      {/* Historial.
+          En el celular la barra de abajo solo tiene lugar para cinco pestañas,
+          así que esta sección no está ahí. Estaba enterrada en Configuración →
+          Más, que es el lugar equivocado: no es un ajuste, es una vista de
+          datos. Acá queda al lado de Metas, la otra sección que tampoco entra
+          en la barra. */}
+      <button
+        type="button"
+        onClick={() => navigate('/historial')}
+        className="card flex w-full items-center gap-3 px-5 py-4 text-left"
+      >
+        <span className="text-[20px]" aria-hidden>
+          🧾
+        </span>
+        <span className="flex-1">
+          <span className="text-primary block text-[14px] font-semibold">Historial</span>
+          <span className="text-muted block text-[12px]">
+            Movimientos, aportes y rendimiento
+          </span>
+        </span>
+        <IconChevronRight className="text-muted shrink-0" />
+      </button>
+
       </div>
 
       {/* ── Columna derecha: los datos ─────────────────────────────── */}
