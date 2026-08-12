@@ -33,6 +33,23 @@ export function usePullToRefresh(onRefresh: () => Promise<unknown>) {
         startY.current = null
         return
       }
+
+      // Un gesto que empieza dentro de un modal NO es un pull-to-refresh.
+      //
+      // Estos listeners son NATIVOS y viven en `window`, así que no hay
+      // stopPropagation de React que los frene: el modal está en un portal,
+      // pero el evento igual llega hasta acá.
+      //
+      // Sin este guardia pasaban dos cosas, y la segunda es la que rompía de
+      // verdad: arrastrar hacia abajo adentro del modal disparaba un sync por
+      // detrás, y el `preventDefault` de más abajo mataba el scroll interno
+      // del modal — con el teclado abierto, el botón de Guardar quedaba
+      // inalcanzable, que es justo lo que el scroll interno vino a resolver.
+      if ((e.target as Element | null)?.closest?.('[role="dialog"]')) {
+        startY.current = null
+        return
+      }
+
       startY.current = e.touches[0].clientY
     }
 

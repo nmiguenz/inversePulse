@@ -50,25 +50,51 @@ export function CashFlowModal({
 
   // Escape cierra, como en cualquier modal. Sin esto la única salida en
   // escritorio es apuntar al botón.
-  //
-  // Y se traba el scroll del fondo: si no, deslizar dentro del modal arrastra
-  // la página de atrás y el modal parece irse solo.
   useEffect(() => {
     if (!open) return
-
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape') onClose()
     }
     window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [open, onClose])
 
-    const previous = document.body.style.overflow
-    document.body.style.overflow = 'hidden'
+  /**
+   * Traba el scroll del fondo mientras el modal está abierto.
+   *
+   * `overflow: hidden` no alcanza: en Safari de iOS no traba nada, y acá el
+   * `body` ES el elemento que scrollea —no hay envoltorio interno en el
+   * AppShell—. Hay que congelarlo con `position: fixed` desplazado hacia
+   * arriba y devolverlo a su lugar al cerrar; si no, cerrar el modal te deja
+   * arriba de todo.
+   *
+   * Va SEPARADO del Escape y depende solo de `open`. Si dependiera de
+   * `onClose` —que en los dos llamadores es una función nueva en cada render—
+   * el body se congelaría y descongelaría en cada re-render, y la segunda
+   * congelada leería `scrollY` con la página ya fija, o sea 0: cerrar el modal
+   * te mandaría al principio de la página.
+   */
+  useEffect(() => {
+    if (!open) return
+
+    const scrollY = window.scrollY
+    const previous = {
+      position: document.body.style.position,
+      top: document.body.style.top,
+      width: document.body.style.width,
+    }
+
+    document.body.style.position = 'fixed'
+    document.body.style.top = `-${scrollY}px`
+    document.body.style.width = '100%'
 
     return () => {
-      window.removeEventListener('keydown', onKey)
-      document.body.style.overflow = previous
+      document.body.style.position = previous.position
+      document.body.style.top = previous.top
+      document.body.style.width = previous.width
+      window.scrollTo(0, scrollY)
     }
-  }, [open, onClose])
+  }, [open])
 
   if (!open) return null
 
@@ -120,15 +146,29 @@ export function CashFlowModal({
         e.stopPropagation()
         onClose()
       }}
+      // Lo mismo con el gesto, que es lo que de verdad rompía: la tarjeta de
+      // alerta escucha touchstart/move/end para descartarse deslizando, y
+      // arrastrar hacia la izquierda DENTRO del modal movía la tarjeta de
+      // atrás. Pasados los 96px se descartaba, desmontando el modal abierto a
+      // mitad de carga.
+      onTouchStart={(e) => e.stopPropagation()}
+      onTouchMove={(e) => e.stopPropagation()}
+      onTouchEnd={(e) => e.stopPropagation()}
     >
       {/* Hoja desde abajo en celular, caja centrada en escritorio: el pulgar
           llega al borde inferior, el mouse al centro.
 
           `max-h` + scroll propio para cuando el teclado del celular se come
           media pantalla: sin eso, el botón de Guardar queda tapado y no hay
-          forma de llegar a él. */}
+          forma de llegar a él.
+
+          El `my-auto` va SOLO en escritorio. En flexbox los márgenes auto del
+          eje transversal absorben el espacio libre y le ganan a `align-items`,
+          así que puesto siempre anulaba el `items-end` del contenedor: en el
+          celular la hoja quedaba centrada y flotando, con las esquinas de
+          abajo cuadradas y el padding de safe-area colgando en el aire. */}
       <div
-        className="bg-surface border-line my-auto max-h-[90dvh] w-full max-w-md overflow-y-auto rounded-t-2xl border p-5 sm:rounded-2xl"
+        className="bg-surface border-line max-h-[90dvh] w-full max-w-md overflow-y-auto rounded-t-2xl border p-5 sm:my-auto sm:rounded-2xl"
         style={{ paddingBottom: 'calc(1.25rem + env(safe-area-inset-bottom))' }}
         onClick={(e) => e.stopPropagation()}
       >
