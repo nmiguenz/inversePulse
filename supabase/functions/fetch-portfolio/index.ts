@@ -185,23 +185,34 @@ async function syncUser(userId: string) {
 
   // ── El resultado del día ──────────────────────────────────────────────
   //
-  // Se guarda calculado, no derivado en el cliente, porque el balance mensual
-  // tiene que poder sumarse en la base.
+  // Es la suma de cuánto se movió CADA producto en el día, no la diferencia
+  // entre el valor total de hoy y el de ayer.
   //
-  // "El día anterior" es el último día CON snapshot, no ayer: los fines de
-  // semana y feriados no hay corridas, y restar contra un día inexistente
-  // daría un lunes con el resultado de tres días metido adentro.
-  const { data: prev } = await db
-    .from('portfolio_snapshots')
-    .select('total_value')
-    .eq('user_id', userId)
-    .lt('snapshot_date', today)
-    .order('snapshot_date', { ascending: false })
-    .limit(1)
-    .maybeSingle()
+  // La versión anterior restaba los totales y descontaba aportes y retiros. Se
+  // veía razonable y estaba mal: `total_value` son las POSICIONES, sin el
+  // efectivo. Vender un CEDEAR o rescatar un FCI saca plata de las posiciones y
+  // la pone en la cuenta, así que el total caía por el monto de la venta y eso
+  // figuraba como pérdida del día. Un rescate de $754.000 aparecía como una
+  // pérdida de $754.000 sin que el mercado se hubiera movido.
+  //
+  // Medido así, comprar, vender, rescatar, ingresar o retirar plata no mueven
+  // el número: solo lo mueve el precio. Que es lo que se quiere leer.
+  //
+  // Se trabaja desde el PORCENTAJE y no desde el precio anterior para no tener
+  // que convertir monedas: `valorizado` ya viene en pesos, así que
+  // `valorizado / (1 + pct/100)` da el valor de ayer en pesos, sea el activo en
+  // dólares o en pesos.
+  const dailyPnl = activos.reduce((sum, a) => {
+    const pct = a.variacionDiaria ?? 0
+    // −100% dejaría el valor de ayer en cero: no se puede derivar, se saltea
+    if (pct <= -100) return sum
+    const value = valueInArs(a)
+    return sum + (value - value / (1 + pct / 100))
+  }, 0)
 
-  // Los aportes y retiros del día NO son resultado. Sin descontarlos, meter
-  // $200.000 a la cuenta figuraría como una ganancia de $200.000.
+  // Los movimientos de dinero ya NO entran en el resultado, pero se siguen
+  // guardando: el rendimiento del período los necesita para no contar un
+  // aporte como ganancia.
   const { data: flows } = await db
     .from('transactions')
     .select('kind, total')
@@ -214,8 +225,6 @@ async function syncUser(userId: string) {
     (sum, f) => sum + (f.kind === 'deposit' ? Number(f.total) : -Number(f.total)),
     0,
   )
-
-  const dailyPnl = prev ? totalValue - Number(prev.total_value) - netCashFlow : null
 
   const snapshot = {
     user_id: userId,

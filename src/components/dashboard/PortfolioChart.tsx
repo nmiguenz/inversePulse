@@ -5,7 +5,12 @@ import { formatARS, formatCompactARS, toneOf, toneText } from '@/lib/format'
 export type Snapshot = {
   snapshot_date: string
   total_value: number
-  /** Resultado del día, ya descontados aportes y retiros (0027). */
+  /**
+   * Resultado del día por movimiento de PRECIOS (0028).
+   *
+   * No lo afectan compras, ventas, rescates, aportes ni retiros: vender no es
+   * perder, es cambiar de forma la misma plata.
+   */
   daily_pnl?: number | null
 }
 
@@ -59,8 +64,8 @@ export function PortfolioChart({ snapshots }: { snapshots: Snapshot[] }) {
   if (!daily.length) {
     return (
       <p className="text-muted text-[12px] leading-relaxed">
-        Todavía no hay un día cerrado con el que comparar. Se guarda un resultado por día, así que
-        mañana ya vas a ver la primera barra.
+        Todavía no hay resultados guardados. Se registra cuánto se movió tu cartera cada día, así
+        que en la próxima sincronización ya vas a ver la primera barra.
       </p>
     )
   }
