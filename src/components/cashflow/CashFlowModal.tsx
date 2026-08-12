@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react'
+import { createPortal } from 'react-dom'
 import { useAuth } from '@/lib/auth'
 import { saveCashFlow, todayISO, type CashFlowKind } from '@/lib/cashflow'
 
@@ -49,13 +50,24 @@ export function CashFlowModal({
 
   // Escape cierra, como en cualquier modal. Sin esto la única salida en
   // escritorio es apuntar al botón.
+  //
+  // Y se traba el scroll del fondo: si no, deslizar dentro del modal arrastra
+  // la página de atrás y el modal parece irse solo.
   useEffect(() => {
     if (!open) return
+
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape') onClose()
     }
     window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
+
+    const previous = document.body.style.overflow
+    document.body.style.overflow = 'hidden'
+
+    return () => {
+      window.removeEventListener('keydown', onKey)
+      document.body.style.overflow = previous
+    }
   }, [open, onClose])
 
   if (!open) return null
@@ -83,18 +95,40 @@ export function CashFlowModal({
     }
   }
 
-  return (
+  /**
+   * Va por portal a <body>, y no es un detalle estético.
+   *
+   * `position: fixed` se resuelve contra la pantalla SALVO que algún ancestro
+   * tenga `transform`, `filter` o `backdrop-filter` distinto de `none`: ese
+   * ancestro pasa a ser el bloque contenedor. Los dos lugares que abren este
+   * modal caen justo ahí — el header tiene `backdrop-blur-xl` y la tarjeta de
+   * alerta tiene un `translateX` para el gesto de deslizar. El modal quedaba
+   * anclado a la barra de 56px y se iba de la pantalla.
+   *
+   * Sacándolo del árbol el problema no puede volver, venga de donde venga.
+   */
+  return createPortal(
     <div
-      className="fixed inset-0 z-[60] flex items-end justify-center bg-black/50 p-0 backdrop-blur-sm sm:items-center sm:p-4"
+      className="fixed inset-0 z-[60] flex items-end justify-center overflow-y-auto bg-black/50 p-0 backdrop-blur-sm sm:items-center sm:p-4"
       role="dialog"
       aria-modal="true"
       aria-label="Registrar aporte o retiro"
-      onClick={onClose}
+      // React propaga los eventos por el árbol de COMPONENTES, no por el DOM,
+      // así que un portal no corta el burbujeo: sin esto, cerrar tocando el
+      // fondo también dispara el onClick de la tarjeta de alerta que lo abrió.
+      onClick={(e) => {
+        e.stopPropagation()
+        onClose()
+      }}
     >
       {/* Hoja desde abajo en celular, caja centrada en escritorio: el pulgar
-          llega al borde inferior, el mouse al centro. */}
+          llega al borde inferior, el mouse al centro.
+
+          `max-h` + scroll propio para cuando el teclado del celular se come
+          media pantalla: sin eso, el botón de Guardar queda tapado y no hay
+          forma de llegar a él. */}
       <div
-        className="bg-surface border-line w-full max-w-md rounded-t-2xl border p-5 sm:rounded-2xl"
+        className="bg-surface border-line my-auto max-h-[90dvh] w-full max-w-md overflow-y-auto rounded-t-2xl border p-5 sm:rounded-2xl"
         style={{ paddingBottom: 'calc(1.25rem + env(safe-area-inset-bottom))' }}
         onClick={(e) => e.stopPropagation()}
       >
@@ -178,6 +212,7 @@ export function CashFlowModal({
           </button>
         </form>
       </div>
-    </div>
+    </div>,
+    document.body,
   )
 }
