@@ -175,6 +175,8 @@ export type Alert = {
   message: string
   severity: AlertSeverity
   action_suggested: string | null
+  /** Monto asociado, cuando la alerta tiene uno (0027). Lo usa cash_flow_review. */
+  amount: number | null
   is_read: boolean
   is_dismissed: boolean
   push_sent: boolean

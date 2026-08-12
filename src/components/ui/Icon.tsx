@@ -101,3 +101,40 @@ export function IconInfo(props: IconProps) {
     </svg>
   )
 }
+
+/**
+ * Entrada de dinero: flecha que baja hacia una bandeja.
+ *
+ * El par entrada/salida se distingue por la DIRECCIÓN de la flecha, no por el
+ * color: en el header van sobre el mismo fondo neutro que la campana.
+ */
+export function IconCashIn(props: IconProps) {
+  return (
+    <svg {...base} {...props}>
+      <path d="M12 3v10" />
+      <path d="m8 9.5 4 4 4-4" />
+      <path d="M4 16v3a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-3" />
+    </svg>
+  )
+}
+
+/** Salida de dinero: la misma bandeja, flecha que sube y se va. */
+export function IconCashOut(props: IconProps) {
+  return (
+    <svg {...base} {...props}>
+      <path d="M12 13V3" />
+      <path d="m8 6.5 4-4 4 4" />
+      <path d="M4 16v3a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-3" />
+    </svg>
+  )
+}
+
+/** Cabecera de columna ordenable. `dir` null = ordenable pero sin usar. */
+export function IconSort({ dir, ...props }: IconProps & { dir: 'asc' | 'desc' | null }) {
+  return (
+    <svg {...base} width={12} height={12} strokeWidth={2.25} {...props}>
+      <path d="m8 10 4-4 4 4" opacity={dir === 'desc' ? 0.25 : 1} />
+      <path d="m8 14 4 4 4-4" opacity={dir === 'asc' ? 0.25 : 1} />
+    </svg>
+  )
+}

@@ -1,7 +1,9 @@
 import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { IconBell } from '@/components/ui/Icon'
+import { IconBell, IconCashIn, IconCashOut } from '@/components/ui/Icon'
+import { CashFlowModal } from '@/components/cashflow/CashFlowModal'
 import { usePortfolio } from '@/hooks/usePortfolio'
+import type { CashFlowKind } from '@/lib/cashflow'
 
 type TopBarProps = {
   title: string
@@ -13,6 +15,7 @@ export function TopBar({ title, subtitle, alertCount = 0 }: TopBarProps) {
   const navigate = useNavigate()
   const { reload } = usePortfolio()
   const [refreshing, setRefreshing] = useState(false)
+  const [cashFlow, setCashFlow] = useState<CashFlowKind | null>(null)
 
   async function refresh() {
     setRefreshing(true)
@@ -58,6 +61,31 @@ export function TopBar({ title, subtitle, alertCount = 0 }: TopBarProps) {
           <span className="text-secondary">{refreshing ? 'Actualizando…' : 'Actualizar'}</span>
         </button>
 
+        {/* Aportes y retiros, a mano.
+            IOL no publica los movimientos de dinero por API, así que esto no
+            es un atajo: es la ÚNICA forma de que entren. Van en el header
+            porque se cargan en el momento en que pasan —justo después de
+            transferir— y no cuando uno se acuerda de abrir el Historial. */}
+        <button
+          type="button"
+          aria-label="Registrar un aporte"
+          title="Registrar un aporte"
+          onClick={() => setCashFlow('deposit')}
+          className="border-subtle bg-surface active:bg-hover flex h-9 w-9 items-center justify-center rounded-full border transition-colors"
+        >
+          <IconCashIn width={18} height={18} className="text-gain" />
+        </button>
+
+        <button
+          type="button"
+          aria-label="Registrar un retiro"
+          title="Registrar un retiro"
+          onClick={() => setCashFlow('withdrawal')}
+          className="border-subtle bg-surface active:bg-hover flex h-9 w-9 items-center justify-center rounded-full border transition-colors"
+        >
+          <IconCashOut width={18} height={18} className="text-loss" />
+        </button>
+
         <button
           type="button"
           aria-label={`Alertas${alertCount ? `, ${alertCount} sin leer` : ''}`}
@@ -73,6 +101,15 @@ export function TopBar({ title, subtitle, alertCount = 0 }: TopBarProps) {
         </button>
         </div>
       </div>
+
+      {/* Al guardar se recarga la cartera: el aporte cambia el efectivo y el
+          resultado del día, y verlos actualizarse confirma que se registró. */}
+      <CashFlowModal
+        open={cashFlow !== null}
+        initialKind={cashFlow ?? 'deposit'}
+        onClose={() => setCashFlow(null)}
+        onSaved={() => void reload()}
+      />
     </header>
   )
 }

@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useState } from 'react'
+import { useCallback, useMemo, useState, type ReactNode } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { Card, EmptyState, SectionTitle } from '@/components/ui/Card'
 import { MetricCard } from '@/components/ui/MetricCard'
@@ -16,7 +16,7 @@ import { usePortfolio } from '@/hooks/usePortfolio'
 import { usePullToRefresh } from '@/hooks/usePullToRefresh'
 import { PullIndicator } from '@/components/ui/PullIndicator'
 import { AssetLogo } from '@/components/ui/AssetLogo'
-import { IconChevronRight, IconEye, IconEyeOff } from '@/components/ui/Icon'
+import { IconChevronRight, IconEye, IconEyeOff, IconSort } from '@/components/ui/Icon'
 import { dayChange, sectorBreakdown, sellRanking, totalGain, totalValue, typeBreakdown, worstPosition } from '@/lib/portfolio'
 import { formatARS, formatCompactARS, formatPct, formatSignedARS, toneOf, toneText } from '@/lib/format'
 import { RESCUE_LABEL } from '@/lib/sectors'
@@ -78,6 +78,22 @@ export function Dashboard() {
     () => (typeFilter ? positions.filter((p) => p.asset_type === typeFilter) : positions),
     [positions, typeFilter],
   )
+
+  // Orden de la tabla. Arranca por valorizado descendente, que es como venía
+  // antes de que se pudiera ordenar y es el orden que más se mira.
+  const [sort, setSort] = useState<SortState>({ column: 'value', dir: 'desc' })
+
+  const sorted = useMemo(() => {
+    const { column, dir } = sort
+    const sign = dir === 'desc' ? -1 : 1
+
+    return [...filtered].sort((a, b) => {
+      // El símbolo es texto: `localeCompare` respeta acentos y mayúsculas,
+      // que una resta no sabe hacer.
+      if (column === 'symbol') return sign * a.symbol.localeCompare(b.symbol, 'es')
+      return sign * (a[column] - b[column])
+    })
+  }, [filtered, sort])
 
   const filteredView = useMemo(
     () => ({
@@ -259,7 +275,8 @@ export function Dashboard() {
       {/* ── Columna derecha: los datos ─────────────────────────────── */}
       <div className="contents lg:block lg:space-y-4">
 
-      {/* Evolución de la cartera */}
+      {/* Evolución: lo que se ganó o se perdió, no cuánto hay. El cuánto hay
+          ya está arriba en letras grandes. */}
       <div>
         <SectionTitle icon="📉">Evolución</SectionTitle>
         <Card>
@@ -308,13 +325,21 @@ export function Dashboard() {
           {/* Mismos anchos y proporciones que PositionRow, para que cada
               título caiga sobre su columna */}
           <div className="text-muted border-subtle flex items-center gap-2 border-b px-4 py-2.5 text-[11px]">
-            <span className="w-12 shrink-0 text-center">Activo</span>
-            <span className="min-w-0 flex-1 text-right">Día</span>
-            <span className="min-w-0 flex-1 text-right">Rend.</span>
-            <span className="min-w-0 flex-[1.4] text-right">Valorizado</span>
+            <SortHeader column="symbol" sort={sort} onSort={setSort} className="w-12 shrink-0 justify-center">
+              Activo
+            </SortHeader>
+            <SortHeader column="dayPct" sort={sort} onSort={setSort} className="min-w-0 flex-1 justify-end">
+              Día
+            </SortHeader>
+            <SortHeader column="gainPct" sort={sort} onSort={setSort} className="min-w-0 flex-1 justify-end">
+              Rend.
+            </SortHeader>
+            <SortHeader column="value" sort={sort} onSort={setSort} className="min-w-0 flex-[1.4] justify-end">
+              Valorizado
+            </SortHeader>
           </div>
           <ul>
-            {filtered.map((p) => (
+            {sorted.map((p) => (
               <PositionRow key={p.id} position={p} />
             ))}
           </ul>
@@ -438,5 +463,52 @@ function DashboardSkeleton() {
       </div>
       <div className="card h-[240px] animate-pulse" />
     </div>
+  )
+}
+
+/** Las columnas que se pueden ordenar. Coinciden con campos de PositionMetrics. */
+type SortColumn = 'symbol' | 'dayPct' | 'gainPct' | 'value'
+type SortState = { column: SortColumn; dir: 'asc' | 'desc' }
+
+/**
+ * Cabecera clickeable de la tabla de posiciones.
+ *
+ * El primer toque en una columna nueva ordena de MAYOR A MENOR: al mirar
+ * "Día" lo que se busca es qué subió más, no qué bajó más. El segundo toque
+ * invierte.
+ *
+ * La flecha activa se pinta y la otra queda tenue, así que la columna que
+ * manda se reconoce de un vistazo sin tener que leer.
+ */
+function SortHeader({
+  column,
+  sort,
+  onSort,
+  className = '',
+  children,
+}: {
+  column: SortColumn
+  sort: SortState
+  onSort: (next: SortState) => void
+  className?: string
+  children: ReactNode
+}) {
+  const active = sort.column === column
+  const dir = active ? sort.dir : null
+
+  return (
+    <button
+      type="button"
+      onClick={() =>
+        onSort({ column, dir: active && sort.dir === 'desc' ? 'asc' : 'desc' })
+      }
+      aria-sort={active ? (sort.dir === 'asc' ? 'ascending' : 'descending') : 'none'}
+      className={`active:text-primary flex items-center gap-0.5 transition-colors ${
+        active ? 'text-secondary font-medium' : ''
+      } ${className}`}
+    >
+      <span className="truncate">{children}</span>
+      <IconSort dir={dir} className={active ? 'text-accent shrink-0' : 'shrink-0 opacity-45'} />
+    </button>
   )
 }

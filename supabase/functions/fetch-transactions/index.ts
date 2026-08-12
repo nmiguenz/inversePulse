@@ -315,9 +315,13 @@ async function syncUser(userId: string, lookbackDays = LOOKBACK_DAYS) {
       .limit(1)
 
     if (!(existing ?? []).length) {
-      await db.from('alerts').insert({
+      const row = {
         user_id: userId,
         alert_type: 'cash_flow_review',
+        // El monto va como DATO además de en el texto: es lo que permite que
+        // al tocar la alerta se abra el formulario ya completo, sin que el
+        // frontend tenga que parsear un título en castellano.
+        amount: Math.abs(residual),
         title: isDeposit ? `¿Ingresaste $${amount}?` : `¿Retiraste $${amount}?`,
         message:
           `El efectivo de la cuenta cambió $${amount} más de lo que explican tus operaciones. ` +
@@ -326,7 +330,14 @@ async function syncUser(userId: string, lookbackDays = LOOKBACK_DAYS) {
           `parece una ganancia.`,
         severity: 'info',
         action_suggested: 'Registrarlo en Historial',
-      })
+      }
+
+      // Sin la 0027 no existe `amount`; la alerta importa más que el prellenado
+      const { error } = await db.from('alerts').insert(row)
+      if (error) {
+        const { amount: _a, ...legacy } = row
+        await db.from('alerts').insert(legacy)
+      }
       asked = true
     }
   }

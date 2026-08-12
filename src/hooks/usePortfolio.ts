@@ -85,7 +85,7 @@ export function PortfolioProvider({ children }: { children: ReactNode }) {
       supabase.from('price_history').select('symbol, close_price, recorded_at').gte('recorded_at', since(30)).order('recorded_at'),
       supabase
         .from('portfolio_snapshots')
-        .select('snapshot_date, total_value')
+        .select('snapshot_date, total_value, daily_pnl')
         .eq('user_id', userId)
         .gte('snapshot_date', since(90))
         .order('snapshot_date'),

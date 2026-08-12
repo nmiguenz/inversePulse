@@ -183,10 +183,45 @@ async function syncUser(userId: string) {
       .filter((a) => toAssetType(a.titulo.tipo) === type)
       .reduce((sum, a) => sum + valueInArs(a), 0)
 
-  const { error: snapshotError } = await db.from('portfolio_snapshots').upsert(
-    {
-      user_id: userId,
-      total_value: totalValue,
+  // ── El resultado del día ──────────────────────────────────────────────
+  //
+  // Se guarda calculado, no derivado en el cliente, porque el balance mensual
+  // tiene que poder sumarse en la base.
+  //
+  // "El día anterior" es el último día CON snapshot, no ayer: los fines de
+  // semana y feriados no hay corridas, y restar contra un día inexistente
+  // daría un lunes con el resultado de tres días metido adentro.
+  const { data: prev } = await db
+    .from('portfolio_snapshots')
+    .select('total_value')
+    .eq('user_id', userId)
+    .lt('snapshot_date', today)
+    .order('snapshot_date', { ascending: false })
+    .limit(1)
+    .maybeSingle()
+
+  // Los aportes y retiros del día NO son resultado. Sin descontarlos, meter
+  // $200.000 a la cuenta figuraría como una ganancia de $200.000.
+  const { data: flows } = await db
+    .from('transactions')
+    .select('kind, total')
+    .eq('user_id', userId)
+    .in('kind', ['deposit', 'withdrawal'])
+    .gte('executed_at', `${today}T00:00:00-03:00`)
+    .lte('executed_at', `${today}T23:59:59-03:00`)
+
+  const netCashFlow = (flows ?? []).reduce(
+    (sum, f) => sum + (f.kind === 'deposit' ? Number(f.total) : -Number(f.total)),
+    0,
+  )
+
+  const dailyPnl = prev ? totalValue - Number(prev.total_value) - netCashFlow : null
+
+  const snapshot = {
+    user_id: userId,
+    total_value: totalValue,
+    daily_pnl: dailyPnl,
+    net_cash_flow: netCashFlow,
       cedears_value: byType('CEDEAR'),
       fci_value: byType('FCI'),
       bonds_value: byType('BONO'),
@@ -194,11 +229,25 @@ async function syncUser(userId: string) {
       // negativo acá se propaga al rendimiento del período (que lo suma al
       // valor de la cartera) y a la detección de aportes por diferencia de
       // saldo, que lo compara contra el día anterior.
-      cash_value: available,
-      snapshot_date: today,
-    },
-    { onConflict: 'user_id,snapshot_date' },
-  )
+    cash_value: available,
+    snapshot_date: today,
+  }
+
+  let { error: snapshotError } = await db
+    .from('portfolio_snapshots')
+    .upsert(snapshot, { onConflict: 'user_id,snapshot_date' })
+
+  // Sin la 0027 no existen las columnas nuevas y PostgREST rechaza el upsert
+  // entero. Perder el snapshot del día sería perder un punto del historial
+  // para siempre, así que se guarda lo que sí entra.
+  if (snapshotError) {
+    const { daily_pnl: _p, net_cash_flow: _c, ...legacy } = snapshot
+    const retry = await db
+      .from('portfolio_snapshots')
+      .upsert(legacy, { onConflict: 'user_id,snapshot_date' })
+    snapshotError = retry.error
+  }
+
   if (snapshotError) throw snapshotError
 
   await db

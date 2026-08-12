@@ -2,6 +2,7 @@ import { useRef, useState, type TouchEvent } from 'react'
 import type { Alert } from '@/lib/types'
 import { AlertBadge } from '@/components/ui/Badge'
 import { IdleCashOptions } from '@/components/alerts/IdleCashOptions'
+import { CashFlowModal } from '@/components/cashflow/CashFlowModal'
 import { formatRelativeTime } from '@/lib/format'
 import { supabase } from '@/lib/supabase'
 
@@ -45,6 +46,7 @@ export function AlertCard({
   const [offset, setOffset] = useState(0)
   const [leaving, setLeaving] = useState(false)
   const [showOptions, setShowOptions] = useState(false)
+  const [showCashFlow, setShowCashFlow] = useState(false)
   const [muting, setMuting] = useState(false)
   const startX = useRef(0)
 
@@ -156,6 +158,33 @@ export function AlertCard({
           >
             {muting ? 'Silenciando…' : 'No mostrar por 7 días'}
           </button>
+        )}
+
+        {/* "¿Ingresaste $200.000?" es una PREGUNTA: tiene que poder
+            responderse ahí mismo. Antes mandaba a buscar el formulario en
+            Historial, y una alerta que te manda a otra pantalla a repetir un
+            número que la app ya sabe termina sin responderse. El monto viene
+            en la alerta (0027), así que el formulario se abre completo. */}
+        {alert.alert_type === 'cash_flow_review' && (
+          <>
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation()
+                setShowCashFlow(true)
+              }}
+              className="border-accent text-accent active:bg-hover mt-3 w-full rounded-xl border py-2 text-[12px] font-medium"
+            >
+              Registrarlo ahora
+            </button>
+            <CashFlowModal
+              open={showCashFlow}
+              onClose={() => setShowCashFlow(false)}
+              initialKind={alert.title.includes('Retiraste') ? 'withdrawal' : 'deposit'}
+              initialAmount={alert.amount}
+              onSaved={() => onDismiss(alert.id)}
+            />
+          </>
         )}
 
         {alert.alert_type === 'idle_cash' && (
