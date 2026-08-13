@@ -24,6 +24,7 @@ import { isServiceRole, unauthorized } from '../_shared/auth.ts'
 import { fetchFeed, type FeedItem } from '../_shared/rss.ts'
 import { getUserApiKey } from '../_shared/apiKey.ts'
 import { canUseAI } from '../_shared/market.ts'
+import { buildInvestorProfile, type UserSettings } from '../_shared/profile.ts'
 import { analyzeNews, type NewsAnalysis } from '../_shared/claude.ts'
 import { sendPush } from '../_shared/push.ts'
 
@@ -201,6 +202,8 @@ Deno.serve(async (req) => {
     const apiKey = await getUserApiKey(db, user.id)
     if (!apiKey) continue
 
+    const profile = await buildInvestorProfile(db, user.id, user.settings as UserSettings)
+
     const userSymbols = [
       ...new Set((positions ?? []).filter((p) => p.user_id === user.id).map((p) => p.symbol)),
     ]
@@ -278,6 +281,10 @@ Deno.serve(async (req) => {
           })),
           topics,
           userSymbols,
+          // El perfil también acá: una noticia sobre semis le importa mucho más
+          // a quien tiene convicción en semis, y el impact_level tiene que
+          // reflejarlo en vez de ser el mismo para todos.
+          profile,
         ),
       ),
     )

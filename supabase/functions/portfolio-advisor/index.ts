@@ -12,6 +12,7 @@ import { isServiceRole, userIdFromJwt } from '../_shared/auth.ts'
 import { advise, OPPORTUNITY_MODEL, type Recommendation } from '../_shared/claude.ts'
 import { getUserApiKey, markApiKeyUsed } from '../_shared/apiKey.ts'
 import { canUseAI } from '../_shared/market.ts'
+import { buildInvestorProfile, toAdvisorSettings, type UserSettings } from '../_shared/profile.ts'
 import { sendPush } from '../_shared/push.ts'
 import { corsHeaders, jsonWithCors, preflight } from '../_shared/cors.ts'
 
@@ -154,7 +155,7 @@ Deno.serve(async (req) => {
       continue
     }
 
-    const settings = (user.settings ?? {}) as Record<string, number>
+    const settings = (user.settings ?? {}) as UserSettings
     const valueOf = (p: { market_value: number | null; quantity: number; current_price: number }) =>
       p.market_value || p.quantity * p.current_price
     const totalValue = positions.reduce((s, p) => s + valueOf(p), 0)
@@ -211,6 +212,9 @@ Deno.serve(async (req) => {
         positions: positions.map((p) => ({
           symbol: p.symbol,
           sector: p.sector,
+          // El tipo importa para la rotación: el prompt distingue entre rotar
+          // desde un FCI y rotar desde un CEDEAR, y sin esto no puede.
+          assetType: p.asset_type,
           value: valueOf(p),
           gainPct: p.gain_pct ?? 0,
           dayPct:
@@ -232,11 +236,11 @@ Deno.serve(async (req) => {
           sector: u.sector,
           price: priceBySymbol.get(u.symbol) ?? null,
         })),
-        settings: {
-          rebalance_pct: settings.rebalance_pct ?? 15,
-          sector_concentration_pct: settings.sector_concentration_pct ?? 50,
-          take_profit_pct: settings.take_profit_pct ?? 20,
-        },
+        settings: toAdvisorSettings(settings),
+        // Sin el perfil, todas las ramas `isAggressive` del prompt dan false y
+        // se arma la variante MODERADA: por eso el asesor recomendaba comprar
+        // defensivos a alguien cuyo objetivo es maximizar crecimiento.
+        profile: await buildInvestorProfile(db, user.id, settings),
         sectorWeights: [...sectorTotals.entries()].map(([sector, v]) => ({
           sector,
           pct: totalValue > 0 ? (v / totalValue) * 100 : 0,

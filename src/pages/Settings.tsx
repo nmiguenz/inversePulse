@@ -5,6 +5,7 @@ import { currentSubscription, pushSupported, subscribeToPush, unsubscribeFromPus
 import { EarningsManager } from '@/components/settings/EarningsManager'
 import { BrokerConnection } from '@/components/settings/BrokerConnection'
 import { ApiKeySettings } from '@/components/settings/ApiKeySettings'
+import { InvestorProfileSettings } from '@/components/settings/InvestorProfileSettings'
 import { ThresholdSettings } from '@/components/settings/ThresholdSettings'
 import { usePortfolio } from '@/hooks/usePortfolio'
 import { loadTheme, saveTheme, type ThemeChoice } from '@/lib/theme'
@@ -65,6 +66,15 @@ export function Settings() {
         <SectionTitle icon="🔗">Tu cuenta de IOL</SectionTitle>
         <Card>
           <BrokerConnection />
+        </Card>
+      </div>
+
+      {/* Va antes de la API key y de los umbrales a propósito: es lo que
+          decide QUÉ te recomienda el asesor, no cuánto gasta ni cuándo avisa. */}
+      <div>
+        <SectionTitle icon="🎯">Tu perfil de inversor</SectionTitle>
+        <Card>
+          <InvestorProfileSettings />
         </Card>
       </div>
 

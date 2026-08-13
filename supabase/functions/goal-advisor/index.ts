@@ -24,6 +24,7 @@ import { adviseForGoal, type AdvisorContext, type GoalContext } from '../_shared
 import { isServiceRole, userIdFromJwt } from '../_shared/auth.ts'
 import { getUserApiKey, markApiKeyUsed } from '../_shared/apiKey.ts'
 import { canUseAI } from '../_shared/market.ts'
+import { buildInvestorProfile, toAdvisorSettings, type UserSettings } from '../_shared/profile.ts'
 import { jsonWithCors, preflight } from '../_shared/cors.ts'
 
 const db = createClient(
@@ -108,7 +109,7 @@ async function buildAdvisorContext(userId: string): Promise<AdvisorContext | nul
     if (cashEquivalents.has(p.symbol)) sameDayFunds += v
   }
 
-  const settings = (user?.settings ?? {}) as Record<string, number>
+  const settings = (user?.settings ?? {}) as UserSettings
   const availableCash = balance?.available_to_trade_ars ?? balance?.available_ars ?? 0
 
   return {
@@ -117,6 +118,7 @@ async function buildAdvisorContext(userId: string): Promise<AdvisorContext | nul
       return {
         symbol: p.symbol,
         sector: p.sector,
+        assetType: p.asset_type,
         value,
         gainPct: p.gain_pct ?? 0,
         dayPct: p.daily_change_pct ?? 0,
@@ -135,11 +137,8 @@ async function buildAdvisorContext(userId: string): Promise<AdvisorContext | nul
       sector: u.sector,
       price: null,
     })),
-    settings: {
-      rebalance_pct: settings.rebalance_pct ?? 15,
-      sector_concentration_pct: settings.sector_concentration_pct ?? 50,
-      take_profit_pct: settings.take_profit_pct ?? 20,
-    },
+    settings: toAdvisorSettings(settings),
+    profile: await buildInvestorProfile(db, userId, settings),
     sectorWeights: [...bySector].map(([sector, v]) => ({
       sector,
       pct: totalValue > 0 ? (v / totalValue) * 100 : 0,
@@ -308,7 +307,11 @@ Deno.serve(async (req) => {
   }
 
   // ── Camino del cron: todas las metas con objetivo ──────────────────────
-  const { data: users } = await db.from('users').select('id')
+  //
+  // El select traía solo `id`, así que `user.settings` llegaba undefined y
+  // `allow_ai_after_hours` quedaba ignorado en esta corrida: quien lo hubiera
+  // habilitado a conciencia igual se saltaba los domingos.
+  const { data: users } = await db.from('users').select('id, settings')
   const results: Record<string, unknown> = {}
 
   for (const user of users ?? []) {
