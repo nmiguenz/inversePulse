@@ -2,6 +2,7 @@ import { useState } from 'react'
 import type { Recommendation } from '@/lib/types'
 import { formatARS, formatRelativeTime } from '@/lib/format'
 import { AssetLogo } from '@/components/ui/AssetLogo'
+import { resolveRecommendation } from '@/lib/recommendationActions'
 
 const ACTION: Record<string, { label: string; className: string; icon: string }> = {
   buy: { label: 'Comprar', className: 'bg-gain-soft border-gain-line text-gain', icon: '↗' },
@@ -24,9 +25,30 @@ const HORIZON: Record<string, string> = {
   long: '6+ meses',
 }
 
-export function RecommendationCard({ rec }: { rec: Recommendation }) {
+export function RecommendationCard({
+  rec,
+  onResolved,
+}: {
+  rec: Recommendation
+  /** Sin esto la tarjeta es de solo lectura: así se usa en el historial. */
+  onResolved?: (id: string, how: 'fulfilled' | 'dismissed') => void
+}) {
   const [expanded, setExpanded] = useState(false)
+  const [busy, setBusy] = useState<'fulfilled' | 'dismissed' | null>(null)
+  const [error, setError] = useState('')
   const action = ACTION[rec.action] ?? ACTION.hold
+
+  async function resolve(how: 'fulfilled' | 'dismissed') {
+    setBusy(how)
+    setError('')
+    try {
+      await resolveRecommendation(rec.id, how)
+      onResolved?.(rec.id, how)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'No se pudo guardar')
+      setBusy(null)
+    }
+  }
 
   return (
     <li className="card p-5">
@@ -135,6 +157,40 @@ export function RecommendationCard({ rec }: { rec: Recommendation }) {
         )}
         <span className="text-muted ml-auto text-[11px]">{formatRelativeTime(rec.created_at)}</span>
       </footer>
+
+      {/* Cerrarla a mano.
+          Si la ejecutás en IOL desaparece sola cuando entra la operación, pero
+          eso solo funciona en el caso feliz: mismo símbolo y al menos el 80%
+          del monto. Una compra parcial, una decisión de no hacerlo o un "no
+          hacer nada" se quedaban acá hasta la próxima corrida del asesor. */}
+      {onResolved && (
+        <>
+          <div className="border-subtle mt-3 flex gap-2 border-t pt-3">
+            <button
+              type="button"
+              onClick={() => void resolve('fulfilled')}
+              disabled={busy !== null}
+              className="border-gain-line text-gain active:bg-hover flex-1 rounded-xl border py-2 text-[12px] font-medium disabled:opacity-50"
+            >
+              {busy === 'fulfilled' ? 'Guardando…' : 'Ya lo hice'}
+            </button>
+            <button
+              type="button"
+              onClick={() => void resolve('dismissed')}
+              disabled={busy !== null}
+              className="border-line text-muted active:bg-hover rounded-xl border px-4 py-2 text-[12px] disabled:opacity-50"
+            >
+              {busy === 'dismissed' ? 'Guardando…' : 'No me interesa'}
+            </button>
+          </div>
+
+          <p className="text-muted mt-2 text-[11px] leading-relaxed">
+            Si la ejecutás en IOL desaparece sola en cuanto se sincroniza la operación.
+          </p>
+
+          {error && <p className="text-loss mt-2 text-[12px]">{error}</p>}
+        </>
+      )}
     </li>
   )
 }

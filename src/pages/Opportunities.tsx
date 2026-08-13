@@ -63,7 +63,10 @@ export function Opportunities() {
     const held = new Set(positions.map((p) => p.symbol))
     setActive(
       ((current.data ?? []) as Recommendation[])
-        .filter((r) => !r.fulfilled_at && isExecutable(r, held))
+        // Cumplidas y descartadas se filtran acá y no en la consulta: si la
+        // 0021 o la 0029 no corrieron, esas columnas no existen y PostgREST
+        // rechaza el select ENTERO, dejando la pantalla vacía.
+        .filter((r) => !r.fulfilled_at && !r.dismissed_at && isExecutable(r, held))
         .sort(byImportance),
     )
     setPast((evaluated.data ?? []) as Recommendation[])
@@ -152,7 +155,15 @@ export function Opportunities() {
           </div>
           <ul className="space-y-3">
             {active.map((rec) => (
-              <RecommendationCard key={rec.id} rec={rec} />
+              <RecommendationCard
+                key={rec.id}
+                rec={rec}
+                // Sale de la lista en el acto, sin esperar a releer: la
+                // confirmación de que "ya lo hice" tomó es que la tarjeta
+                // desaparece, y un viaje al servidor de por medio se siente
+                // como que el botón no hizo nada.
+                onResolved={(id) => setActive((prev) => prev.filter((r) => r.id !== id))}
+              />
             ))}
           </ul>
         </div>

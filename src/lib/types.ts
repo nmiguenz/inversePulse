@@ -115,6 +115,8 @@ export type Recommendation = {
    */
   fulfilled_at: string | null
   fulfilled_amount: number | null
+  /** La descartaste sin ejecutarla. Separada de `fulfilled_at` para no inflar la tasa de aciertos. */
+  dismissed_at: string | null
   is_active: boolean
   created_at: string
 }
