@@ -1,4 +1,5 @@
 import { useRef, useState, type TouchEvent } from 'react'
+import { useNavigate } from 'react-router-dom'
 import type { Alert } from '@/lib/types'
 import { AlertBadge } from '@/components/ui/Badge'
 import { IdleCashOptions } from '@/components/alerts/IdleCashOptions'
@@ -29,7 +30,25 @@ const DISMISS_THRESHOLD = 96
  * problema esté. Las de mercado no entran — que se pueda apagar un stop loss de
  * un toque sería un botón para perder plata.
  */
-const MUTABLE = new Set(['connection_lost', 'api_key_missing', 'api_key_invalid'])
+const MUTABLE = new Set([
+  'connection_lost',
+  'api_key_missing',
+  'api_key_invalid',
+  'profile_incomplete',
+])
+
+/**
+ * Las alertas de configuración terminan diciendo "…en Configuración" y hasta
+ * ahora no llevaban a ningún lado: decirle a alguien qué hacer y dejarlo
+ * buscando dónde es media explicación. Un mapa en vez de un caso por tipo,
+ * para que no vuelva a haber una alerta de configuración sin salida.
+ */
+const CONFIG_ROUTE: Record<string, string> = {
+  connection_lost: '/config',
+  api_key_missing: '/config',
+  api_key_invalid: '/config',
+  profile_incomplete: '/config',
+}
 
 /** Cuánto dura el silencio. Vence solo, a propósito. */
 const MUTE_DAYS = 7
@@ -43,6 +62,7 @@ export function AlertCard({
   onDismiss: (id: string) => void
   onRead: (id: string) => void
 }) {
+  const navigate = useNavigate()
   const [offset, setOffset] = useState(0)
   const [leaving, setLeaving] = useState(false)
   const [showOptions, setShowOptions] = useState(false)
@@ -142,6 +162,19 @@ export function AlertCard({
           )}
           {!alert.is_read && <span className="bg-accent ml-auto h-2 w-2 rounded-full" aria-label="sin leer" />}
         </footer>
+
+        {CONFIG_ROUTE[alert.alert_type] && (
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation()
+              navigate(CONFIG_ROUTE[alert.alert_type])
+            }}
+            className="border-accent text-accent active:bg-hover mt-3 w-full rounded-xl border py-2 text-[12px] font-medium"
+          >
+            {alert.action_suggested ?? 'Ir a Configuración'}
+          </button>
+        )}
 
         {/* Solo los avisos de configuración se pueden silenciar. Un stop loss
             no: silenciar "cruzaste tu piso de pérdida" es exactamente lo que no

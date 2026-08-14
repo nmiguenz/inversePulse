@@ -326,9 +326,17 @@ Deno.serve(async (req) => {
       const days = Number((user.settings as Record<string, unknown>)?.review_period_days) || 30
       const row = await review(user.id, days)
 
+      // `review` devuelve dos formas distintas de fila según haya datos o no, y
+      // el genérico de PostgREST infiere la más angosta: `data_gaps: null` no
+      // le entra aunque la columna sea nullable. Es ruido de tipos, no un
+      // problema de runtime — pero el ruido es lo que escondió el
+      // `STALE_SYNC_HOURS` que faltaba en evaluate-alerts, así que se silencia
+      // en el punto exacto en vez de dejarlo tapando el resto.
       const { error: saveError } = await db
         .from('performance_reviews')
-        .upsert(row, { onConflict: 'user_id,period_start,period_end' })
+        .upsert(row as Record<string, unknown>, {
+          onConflict: 'user_id,period_start,period_end',
+        })
       if (saveError) throw saveError
 
       results[user.id] = row

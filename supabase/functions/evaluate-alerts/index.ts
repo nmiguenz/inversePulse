@@ -30,6 +30,9 @@ type Settings = {
   rebuy_watch_pct: number
   /** { tipo_de_alerta: fecha_hasta } — el silencio vence a propósito */
   muted_alerts?: Record<string, string>
+  /** Perfil de inversor (0030). Vacíos = el asesor no sabe a quién le habla. */
+  preferred_sectors?: string[]
+  objective?: string
   monitoring_start: string
   monitoring_end: string
   notify_decisions: boolean
@@ -232,6 +235,14 @@ function shouldNotify(s: Settings): boolean {
  * apagar de forma permanente "tu cuenta está desconectada" convierte a la app
  * en algo que dejó de sincronizar sin que nada te lo diga nunca más.
  */
+/**
+ * Horas sin sincronizar a partir de las cuales se considera rota la conexión.
+ *
+ * Tiene que superar un fin de semana largo sin dar falsos positivos, pero
+ * avisar antes de que se pierda un día entero de mercado.
+ */
+const STALE_SYNC_HOURS = 20
+
 async function evaluateSetup(
   userId: string,
   settings: Settings,
@@ -250,7 +261,9 @@ async function evaluateSetup(
     .from('alerts')
     .select('alert_type')
     .eq('user_id', userId)
-    .in('alert_type', ['connection_lost', 'api_key_missing'])
+    // Esta lista es lo que limita cada aviso a uno por día. Un tipo nuevo que
+    // no esté acá se crearía en CADA corrida del cron, o sea cada 5 minutos.
+    .in('alert_type', ['connection_lost', 'api_key_missing', 'profile_incomplete'])
     .gte('created_at', `${today}T00:00:00-03:00`)
 
   const alreadyToday = new Set((todays ?? []).map((a) => a.alert_type))
@@ -322,6 +335,39 @@ async function evaluateSetup(
       message: `${key.last_error} Hasta que la reemplaces, el asesor no va a correr.`,
       action_suggested: 'Reemplazar la key en Configuración',
     })
+  }
+
+  // ── Perfil de inversor ────────────────────────────────────────────────
+  //
+  // Va como `info` y no como crítica a propósito: sin sectores preferidos el
+  // asesor SIGUE recomendando —el prompt omite esa sección y trabaja con el
+  // perfil de riesgo, el objetivo y todo el universo—. Queda menos
+  // personalizado, no roto. Gastar `critical` en algo que funciona igual
+  // entrena a ignorar las que sí importan.
+  const sectors = settings.preferred_sectors
+  const incomplete = !Array.isArray(sectors) || !sectors.length || !settings.objective?.trim()
+
+  if (incomplete && !isMuted('profile_incomplete') && !alreadyToday.has('profile_incomplete')) {
+    // Pedirle a alguien que personalice recomendaciones antes de tener cartera
+    // es ruido: primero conectá, después afinamos.
+    const { count } = await db
+      .from('positions')
+      .select('id', { count: 'exact', head: true })
+      .eq('user_id', userId)
+
+    if ((count ?? 0) > 0) {
+      out.push({
+        alert_type: 'profile_incomplete',
+        symbol: null,
+        severity: 'info',
+        title: 'Definí tu perfil de inversor',
+        message:
+          'El asesor no sabe en qué sectores tenés convicción ni cuál es tu objetivo, así que te ' +
+          'recomienda sobre todo el universo por igual. Definirlo en Configuración hace que ' +
+          'priorice lo que a vos te interesa.',
+        action_suggested: 'Definir tu perfil en Configuración',
+      })
+    }
   }
 
   return out
