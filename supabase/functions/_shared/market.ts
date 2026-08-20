@@ -51,9 +51,10 @@ export function marketState(now = new Date()): MarketState {
   const day = now.getUTCDay()
   const minutes = now.getUTCHours() * 60 + now.getUTCMinutes()
 
-  // 0 domingo, 6 sábado. No se contemplan los feriados de BYMA: no hay una
-  // fuente confiable y gratuita del calendario, y el costo de equivocarse es
-  // una corrida de más que no encuentra precios nuevos.
+  // 0 domingo, 6 sábado. Los feriados NO se contemplan acá a propósito: esto
+  // decide si vale la pena sincronizar, y equivocarse cuesta una corrida de
+  // más. Para saber si un día HUBO RUEDA —que es otra pregunta, y ahí
+  // equivocarse inventa datos— está `isTradingDay`.
   if (day === 0 || day === 6) {
     return { open: false, openOrClosing: false, reason: 'Es fin de semana: el mercado está cerrado.' }
   }
@@ -98,4 +99,66 @@ export function canUseAI(
     allowed: false,
     reason: `${state.reason} El análisis con IA queda en pausa para no gastar en recomendaciones que no vas a poder ejecutar. Podés habilitarlo en Configuración.`,
   }
+}
+
+
+// ============================================================
+// Días de rueda
+// ============================================================
+
+/**
+ * Feriados argentinos por año, cacheados en el módulo.
+ *
+ * La fuente es argentinadatos.com, la misma familia que dolarapi.com que ya
+ * usa `fetch-dollar-rates`. Es gratuita y devuelve `[{ fecha, tipo, nombre }]`.
+ *
+ * Un fallo NO se cachea: se degrada a "solo fines de semana" y se reintenta en
+ * la corrida siguiente. Preferimos perdernos un feriado —y que ese día quede
+ * sin resultado, como antes— a cachear un set vacío por horas.
+ */
+const feriadosPorAnio = new Map<number, Set<string>>()
+
+async function feriados(anio: number): Promise<Set<string>> {
+  const cacheado = feriadosPorAnio.get(anio)
+  if (cacheado) return cacheado
+
+  try {
+    const res = await fetch(`https://api.argentinadatos.com/v1/feriados/${anio}`, {
+      signal: AbortSignal.timeout(5000),
+    })
+    if (!res.ok) throw new Error(`HTTP ${res.status}`)
+    const lista = (await res.json()) as Array<{ fecha?: string }>
+    const set = new Set(lista.map((f) => f.fecha).filter((f): f is string => !!f))
+    if (!set.size) throw new Error('respuesta vacía')
+    feriadosPorAnio.set(anio, set)
+    return set
+  } catch (err) {
+    console.warn(
+      `[market] no se pudo leer el calendario de feriados ${anio}: ${err instanceof Error ? err.message : err}. ` +
+        'Se descartan solo los fines de semana.',
+    )
+    return new Set()
+  }
+}
+
+/**
+ * ¿Hubo rueda ese día?
+ *
+ * Distinta de `isMarketOpen`, que mira la hora: esto mira el CALENDARIO. Un
+ * sábado o un feriado los precios no se mueven, así que IOL sigue devolviendo
+ * la variación del último día operado. Guardar eso como resultado del día
+ * duplica la jornada anterior — que es exactamente lo que pasó el fin de
+ * semana del 15/8/2026 más el feriado del lunes 17: el viernes se contó cuatro
+ * veces y la pérdida del período salió al doble de la real.
+ *
+ * `fecha` es un día calendario de Buenos Aires en formato YYYY-MM-DD.
+ */
+export async function isTradingDay(fecha: string): Promise<boolean> {
+  // Mediodía UTC: para un valor que es solo fecha, evita que el huso lo corra
+  // al día anterior o al siguiente.
+  const dow = new Date(`${fecha}T12:00:00Z`).getUTCDay()
+  if (dow === 0 || dow === 6) return false
+
+  const set = await feriados(Number(fecha.slice(0, 4)))
+  return !set.has(fecha)
 }

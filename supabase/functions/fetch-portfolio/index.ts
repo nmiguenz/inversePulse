@@ -21,6 +21,7 @@ import {
 import { computeImpliedFx, saveImpliedFx } from '../_shared/impliedFx.ts'
 import { isServiceRole, unauthorized, userIdFromJwt } from '../_shared/auth.ts'
 import { jsonWithCors, preflight } from '../_shared/cors.ts'
+import { isTradingDay } from '../_shared/market.ts'
 import {
   previousClose,
   toAssetType,
@@ -350,10 +351,16 @@ async function syncUser(userId: string) {
     0,
   )
 
+  // Un día sin rueda no tiene resultado: IOL sigue devolviendo la variación del
+  // último día operado, así que guardarla acá duplica esa jornada. NULL ya
+  // significa "no se sabe" —lo mismo que el primer día, que no tiene contra qué
+  // comparar— y el gráfico ya sabe descartarlo.
+  const huboRueda = await isTradingDay(today)
+
   const snapshot = {
     user_id: userId,
     total_value: totalValue,
-    daily_pnl: dailyPnl,
+    daily_pnl: huboRueda ? dailyPnl : null,
     net_cash_flow: netCashFlow,
       cedears_value: byType('CEDEAR'),
       fci_value: byType('FCI'),
