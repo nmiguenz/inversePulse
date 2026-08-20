@@ -10,6 +10,7 @@ import {
 } from 'react'
 import { supabase, isSupabaseConfigured } from '@/lib/supabase'
 import { useAuth } from '@/lib/auth'
+import { useAutoRefresh } from '@/hooks/useAutoRefresh'
 import type { Alert } from '@/lib/types'
 
 type AlertsState = {
@@ -118,6 +119,10 @@ export function AlertsProvider({ children }: { children: ReactNode }) {
       void supabase.removeChannel(channel)
     }
   }, [userId, load])
+
+  // Mismo motivo que en usePortfolio: `evaluate-alerts` corre encadenado al
+  // sync, así que el badge se queda viejo por los mismos agujeros del websocket.
+  useAutoRefresh(load, isSupabaseConfigured && Boolean(userId))
 
   const value = useMemo<AlertsState>(() => {
     const markRead = async (id: string) => {

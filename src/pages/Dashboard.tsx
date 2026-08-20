@@ -38,7 +38,7 @@ const topics = [
 
 export function Dashboard() {
   const navigate = useNavigate()
-  const { positions, balance, latestRates, snapshots, iolStatus, loading, error, reload } =
+  const { positions, balance, latestRates, snapshots, iolStatus, lastSyncAt, loading, error, reload } =
     usePortfolio()
 
   // El pulldown pide un sync REAL a IOL, no una relectura de la base: si solo
@@ -458,10 +458,10 @@ export function Dashboard() {
           17:03" a la noche parece un error, cuando en realidad el mercado
           cerró y no hay nada nuevo que traer. */}
       <p className="text-muted pt-1 text-center text-[11px] lg:col-span-2">
-        {iolStatus?.last_sync_at && (
+        {lastSyncAt && (
           <>
             Actualizado{' '}
-            {new Date(iolStatus.last_sync_at).toLocaleTimeString(undefined, {
+            {new Date(lastSyncAt).toLocaleTimeString(undefined, {
               hour: '2-digit',
               minute: '2-digit',
             })}

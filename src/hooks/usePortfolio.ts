@@ -12,6 +12,7 @@ import { supabase, isSupabaseConfigured } from '@/lib/supabase'
 import { useAuth } from '@/lib/auth'
 import type { AccountBalance, DollarRate, IolStatus, Position, PricePoint } from '@/lib/types'
 import { withMetrics } from '@/lib/portfolio'
+import { useAutoRefresh } from '@/hooks/useAutoRefresh'
 
 type Snapshot = { snapshot_date: string; total_value: number }
 type ImpliedFxQuote = { symbol: string; implied_fx: number | null }
@@ -43,6 +44,8 @@ type PortfolioState = {
   historyBySymbol: Map<string, number[]>
   snapshots: Snapshot[]
   iolStatus: IolStatus | null
+  /** Cuándo se escribieron estos números. Ver `lastSyncAt` más abajo. */
+  lastSyncAt: string | null
   loading: boolean
   error: string | null
   reload: () => Promise<void>
@@ -133,6 +136,10 @@ export function PortfolioProvider({ children }: { children: ReactNode }) {
     }
   }, [userId, load])
 
+  // Red de seguridad: si el websocket se durmió (PWA en segundo plano) o algún
+  // evento se perdió, el dashboard igual se pone al día solo.
+  useAutoRefresh(load, isSupabaseConfigured && Boolean(userId))
+
   /** Última cotización por tipo de dólar */
   const latestRates = useMemo(() => {
     const map = new Map<string, DollarRate>()
@@ -160,6 +167,43 @@ export function PortfolioProvider({ children }: { children: ReactNode }) {
     return map
   }, [data.history])
 
+  /**
+   * Cuándo se actualizaron los números que estás viendo.
+   *
+   * Sale de `positions.updated_at` y NO de `iol_status.last_sync_at`, aunque ese
+   * campo parezca el indicado. Dos razones, y la segunda es un bug real:
+   *
+   * - `last_sync_at` se escribe al FINAL de `syncUser`, ~1,3s después del upsert
+   *   de posiciones. El evento de realtime llega con el upsert, así que la
+   *   relectura que dispara lee la marca de la corrida ANTERIOR: el sello
+   *   quedaba siempre un ciclo atrás. Con el cron corriendo puntual cada 5
+   *   minutos, a las 14:47 la app decía "Actualizado 14:40" y parecía roto.
+   * - `iol_status` es una vista: no emite eventos, así que ese valor viejo no se
+   *   corregía hasta la próxima escritura de otra tabla.
+   *
+   * `updated_at` viaja en el mismo payload que los precios, o sea que el sello y
+   * los números que describe son siempre de la misma corrida. Y si un sync falla
+   * no avanza — que es lo correcto: el dato sigue siendo el de antes. El error
+   * en sí se sigue mostrando aparte, desde `last_sync_error`.
+   */
+  const lastSyncAt = useMemo(() => {
+    let latest: string | null = null
+    let latestMs = -Infinity
+    for (const p of data.positions) {
+      // Por timestamp y no por orden alfabético: el offset de la fecha que
+      // devuelve PostgREST hoy es siempre +00:00, pero comparar strings deja el
+      // resultado atado a ese detalle.
+      const ms = Date.parse(p.updated_at)
+      if (Number.isFinite(ms) && ms > latestMs) {
+        latestMs = ms
+        latest = p.updated_at
+      }
+    }
+    // Sin posiciones (cuenta recién conectada, cartera vacía) no hay de dónde
+    // sacarlo y la marca del sync es lo único que hay.
+    return latest ?? data.iolStatus?.last_sync_at ?? null
+  }, [data.positions, data.iolStatus])
+
   const value = useMemo<PortfolioState>(
     () => ({
       positions,
@@ -168,11 +212,12 @@ export function PortfolioProvider({ children }: { children: ReactNode }) {
       historyBySymbol,
       snapshots: data.snapshots,
       iolStatus: data.iolStatus,
+      lastSyncAt,
       loading,
       error,
       reload: load,
     }),
-    [positions, data.balance, latestRates, historyBySymbol, data.snapshots, data.iolStatus, loading, error, load],
+    [positions, data.balance, latestRates, historyBySymbol, data.snapshots, data.iolStatus, lastSyncAt, loading, error, load],
   )
 
   return createElement(PortfolioContext.Provider, { value }, children)
