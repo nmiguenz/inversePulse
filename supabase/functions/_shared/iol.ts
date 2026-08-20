@@ -13,6 +13,22 @@ import { encrypt, decryptOrPlain } from './crypto.ts'
 
 const BASE = 'https://api.invertironline.com'
 
+/** La API pública documentada. Es el host de todo lo que la app usa hoy. */
+export const PUBLIC_API = BASE
+
+/**
+ * Gateway interno de IOL — INALCANZABLE desde acá.
+ *
+ * Es el host que usa el conector MCP para opciones y para stop loss / take
+ * profit. El nombre NO EXISTE en DNS público: no resuelve ni en 1.1.1.1 ni en
+ * 8.8.8.8 (solo matchea con `.com.ar` agregado, que es un catch-all de
+ * typosquatting, con IPs distintas según el resolver). Es interno de verdad.
+ *
+ * Queda documentado para que nadie vuelva a intentarlo: una Edge Function que
+ * le pegue se cuelga hasta agotar el presupuesto de cómputo. No lo uses.
+ */
+export const GATEWAY = 'https://gateway-api-internal.invertironline.com'
+
 export type IolTitulo = {
   simbolo: string
   descripcion: string
@@ -464,11 +480,52 @@ export function exchangePassword(username: string, password: string): Promise<To
 }
 
 async function get<T>(token: string, path: string): Promise<T> {
-  const res = await fetch(`${BASE}${path}`, {
+  return getFrom<T>(BASE, token, path)
+}
+
+/**
+ * GET contra un host arbitrario.
+ *
+ * Existe por el gateway interno: los endpoints de opciones y de stop loss no
+ * están en `api.invertironline.com` sino en
+ * `gateway-api-internal.invertironline.com`, y antes de construir nada encima
+ * hay que saber si el bearer de la app autentica ahí. No usar para código
+ * nuevo salvo que el sondeo confirme el host.
+ */
+export async function getFrom<T>(host: string, token: string, path: string): Promise<T> {
+  const res = await fetch(`${host}${path}`, {
     headers: { Authorization: `Bearer ${token}`, Accept: 'application/json' },
   })
   if (!res.ok) {
     throw new Error(`IOL ${path} → ${res.status} ${await res.text().catch(() => '')}`)
+  }
+  return (await res.json()) as T
+}
+
+/**
+ * POST con cuerpo JSON.
+ *
+ * Es la primera vez que la app ESCRIBE en IOL: hasta ahora todo era lectura.
+ * Cualquier uso tiene que venir de una acción explícita del usuario, nunca de
+ * un CRON — del otro lado hay plata real.
+ */
+export async function post<T>(
+  token: string,
+  path: string,
+  body: unknown,
+  host = BASE,
+): Promise<T> {
+  const res = await fetch(`${host}${path}`, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${token}`,
+      Accept: 'application/json',
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(body),
+  })
+  if (!res.ok) {
+    throw new Error(`IOL POST ${path} → ${res.status} ${await res.text().catch(() => '')}`)
   }
   return (await res.json()) as T
 }
@@ -531,7 +588,7 @@ export const iol = {
     ),
 
   /** Acceso crudo, para sondear rutas todavía no confirmadas */
-  raw: { get },
+  raw: { get, getFrom, post },
 
   // NO hay endpoint de movimientos de dinero (depósitos y extracciones).
   // Probé /cuentas-bancarias/movimientos en GET y POST con cuatro bodies,

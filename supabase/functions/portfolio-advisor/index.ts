@@ -41,6 +41,38 @@ function trend(prices: number[]): string {
   return `${label} (${change > 0 ? '+' : ''}${change.toFixed(1)}%)`
 }
 
+/** Días de mercado en un año, para anualizar la volatilidad diaria. */
+const TRADING_DAYS = 252
+/** Menos que esto no alcanza para un desvío que signifique algo. */
+const MIN_VOL_SAMPLES = 10
+
+/**
+ * Volatilidad realizada anualizada, en %.
+ *
+ * Reemplaza a la implied volatility de opciones: en BCBA los CEDEARs no tienen
+ * opciones listadas (`get_options_chain` devuelve 404 para NVDA, AAPL y MSFT),
+ * así que la IV no existe para esta cartera. La volatilidad realizada se saca
+ * de `price_history`, que ya se está leyendo para la tendencia de 30 días.
+ *
+ * Devuelve null si la serie es corta o si hay precios no positivos — un cero
+ * en la serie haría explotar el logaritmo.
+ */
+function realizedVol(prices: number[]): number | null {
+  if (prices.length < MIN_VOL_SAMPLES) return null
+
+  const returns: number[] = []
+  for (let i = 1; i < prices.length; i++) {
+    if (prices[i] <= 0 || prices[i - 1] <= 0) return null
+    returns.push(Math.log(prices[i] / prices[i - 1]))
+  }
+  if (returns.length < 2) return null
+
+  const mean = returns.reduce((s, r) => s + r, 0) / returns.length
+  // Muestral (n-1): son una muestra de los retornos, no la población entera.
+  const variance = returns.reduce((s, r) => s + (r - mean) ** 2, 0) / (returns.length - 1)
+  return Math.sqrt(variance) * Math.sqrt(TRADING_DAYS) * 100
+}
+
 Deno.serve(async (req) => {
   // El preflight va PRIMERO: llega sin Authorization, así que cualquier chequeo
   // antes de esto lo rechaza y el browser nunca ve los headers de CORS
@@ -206,6 +238,83 @@ Deno.serve(async (req) => {
     const liquidNow = availableCash + sameDayFunds
     const liquidityFloor = totalValue * ((settings.liquidity_floor_pct ?? 15) / 100)
 
+    const heldSymbols = positions.map((p) => p.symbol)
+
+    // ---------- Antigüedad, movimiento esperado y prima cambiaria ----------
+    // Los tres alimentan reglas del prompt que sin el dato no pueden evaluarse:
+    // los 14 días de una posición nueva, el riesgo de recomendar contra un
+    // earnings, y si el CEDEAR está caro en pesos.
+    const [{ data: buys }, { data: earnings }, { data: quotes }, { data: mepRate }] = await Promise.all([
+      // `kind`, NO `side`: en fetch-transactions los dividendos también se
+      // guardan con side='buy', y como acá interesa la operación MÁS VIEJA,
+      // un dividendo viejo se haría pasar por la compra original.
+      db
+        .from('transactions')
+        .select('symbol, executed_at')
+        .eq('user_id', user.id)
+        .eq('kind', 'buy')
+        .in('symbol', heldSymbols)
+        .order('executed_at', { ascending: true }),
+      db
+        .from('earnings_calendar')
+        .select('symbol, report_date')
+        .in('symbol', heldSymbols)
+        .eq('is_reported', false)
+        .gte('report_date', new Date().toISOString().slice(0, 10))
+        .order('report_date', { ascending: true }),
+      // Cartera Y universo sugerible: la prima sirve sobre todo para decidir
+      // una COMPRA, y lo que se compra sale del universo, no de lo que ya tenés.
+      db
+        .from('market_quotes')
+        .select('symbol, implied_fx')
+        .in('symbol', [...new Set([...heldSymbols, ...universe.map((u) => u.symbol)])]),
+      db
+        .from('dollar_rates')
+        .select('sell_price')
+        .eq('rate_type', 'mep')
+        .order('recorded_at', { ascending: false })
+        .limit(1)
+        .maybeSingle(),
+    ])
+
+    // Ambas listas vienen ordenadas ascendente, así que la primera aparición de
+    // cada símbolo ya es la que interesa: la compra más vieja y el earnings más
+    // próximo.
+    const positionAges: Record<string, number> = {}
+    for (const t of buys ?? []) {
+      if (t.symbol && !(t.symbol in positionAges)) {
+        positionAges[t.symbol] = Math.floor((Date.now() - new Date(t.executed_at).getTime()) / 864e5)
+      }
+    }
+
+    const earningsInDays = new Map<string, number>()
+    for (const e of earnings ?? []) {
+      if (!earningsInDays.has(e.symbol)) {
+        earningsInDays.set(e.symbol, Math.ceil((new Date(e.report_date).getTime() - Date.now()) / 864e5))
+      }
+    }
+
+    const expectedMove: Record<string, { vol30d: number; earningsInDays?: number }> = {}
+    for (const p of positions) {
+      const vol = realizedVol(seriesBySymbol.get(p.symbol) ?? [])
+      if (vol === null) continue
+      const days = earningsInDays.get(p.symbol)
+      expectedMove[p.symbol] = { vol30d: vol, ...(days !== undefined ? { earningsInDays: days } : {}) }
+    }
+
+    const mep = mepRate?.sell_price ?? 0
+    const dollarPremium: Record<string, { implicit: number; mep: number; premiumPct: number }> = {}
+    if (mep > 0) {
+      for (const q of quotes ?? []) {
+        if (!q.implied_fx || q.implied_fx <= 0) continue
+        dollarPremium[q.symbol] = {
+          implicit: q.implied_fx,
+          mep,
+          premiumPct: (q.implied_fx / mep - 1) * 100,
+        }
+      }
+    }
+
     let analysis
     try {
       analysis = await advise(apiKey, {
@@ -252,6 +361,9 @@ Deno.serve(async (req) => {
         })),
         liquidityFloor,
         liquidNow,
+        positionAges,
+        expectedMove,
+        dollarPremium,
       })
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err)

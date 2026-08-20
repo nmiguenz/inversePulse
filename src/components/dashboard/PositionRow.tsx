@@ -19,6 +19,12 @@ export function PositionRow({ position }: { position: PositionMetrics }) {
   const dayTone = toneOf(position.dayPct)
   const gainTone = toneOf(position.gainPct)
 
+  // Solo se muestra cuando la prima es accionable. Entre -3% y +3% el CEDEAR
+  // cotiza en línea con el MEP y el dato no cambia ninguna decisión: mostrarlo
+  // en todas las filas sería ruido en la columna que más se mira.
+  const premium = position.fxPremiumPct
+  const showPremium = premium !== undefined && Math.abs(premium) >= 3
+
   return (
     <li>
       <button
@@ -56,7 +62,27 @@ export function PositionRow({ position }: { position: PositionMetrics }) {
           <p className="tnum text-primary text-[13px] font-semibold whitespace-nowrap">
             {format(position.value)}
           </p>
-          <p className="text-muted mt-0.5 text-[11px]">{position.weight.toFixed(1)}%</p>
+          <p className="text-muted mt-0.5 text-[11px]">
+            {position.weight.toFixed(1)}%
+            {showPremium && (
+              // Prima positiva = el CEDEAR está caro en pesos contra el MEP,
+              // o sea comprarlo en ARS es pagar de más. Negativa = descuento.
+              <span
+                className={premium > 0 ? 'text-warning' : 'text-gain'}
+                // Tooltip nativo: en desktop alcanza para desambiguar el "TC".
+                // En mobile no hay hover, y para eso está la fila explicada del
+                // detalle del activo, que es adonde se entra a mirar en serio.
+                title={
+                  premium > 0
+                    ? `Comprarlo en pesos sale ${premium.toFixed(1)}% más caro que via dólar MEP`
+                    : `Comprarlo en pesos sale ${Math.abs(premium).toFixed(1)}% más barato que via dólar MEP`
+                }
+              >
+                {' · TC '}
+                {formatPct(premium)}
+              </span>
+            )}
+          </p>
         </div>
       </button>
     </li>

@@ -15,14 +15,27 @@ function valueOf(p: Position): number {
   return p.market_value || p.quantity * p.current_price
 }
 
-export function withMetrics(positions: Position[]): PositionMetrics[] {
+/**
+ * Prima cambiaria de cada CEDEAR.
+ *
+ * `bySymbol` sale de `market_quotes.implied_fx`, que llena fetch-portfolio
+ * cotizando el ticker con sufijo D. `mep` es el MEP de mercado; sin él no hay
+ * contra qué comparar y la prima no se calcula.
+ */
+export type FxContext = { bySymbol: Map<string, number>; mep: number }
+
+export function withMetrics(positions: Position[], fx?: FxContext): PositionMetrics[] {
   const total = positions.reduce((sum, p) => sum + valueOf(p), 0)
 
   return positions
     .map((p) => {
       const value = valueOf(p)
       const cost = p.quantity * p.avg_buy_price
+      const impliedFx = fx?.bySymbol.get(p.symbol)
       return {
+        ...(impliedFx && fx && fx.mep > 0
+          ? { impliedFx, fxPremiumPct: (impliedFx / fx.mep - 1) * 100 }
+          : {}),
         ...p,
         value,
         // La variación diaria viene de IOL. El cálculo sobre previous_close

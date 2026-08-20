@@ -13,6 +13,7 @@
  */
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
 import { getAccessToken, iol } from '../_shared/iol.ts'
+import { computeImpliedFx, saveImpliedFx } from '../_shared/impliedFx.ts'
 import { isServiceRole, unauthorized } from '../_shared/auth.ts'
 
 const db = createClient(
@@ -289,6 +290,33 @@ async function handle(req: Request): Promise<Response> {
     return Response.json({ ok: false, error: 'ninguna cotización válida', failed }, { status: 502 })
   }
 
+  // Prima cambiaria del universo sugerible.
+  //
+  // `fetch-portfolio` ya calcula la de lo que TENÉS, cada 5 minutos. Acá se
+  // cubre lo que el asesor podría recomendarte COMPRAR, que es justamente
+  // donde el dato decide algo: sin esto sabía si tu GOOGL estaba caro en pesos
+  // pero no si el KO que te iba a sugerir lo estaba.
+  //
+  // Va una vez por día al cierre y no cada 5 min porque son ~40 requests más:
+  // para decidir una compra alcanza con la prima del cierre anterior, que se
+  // mueve mucho menos que el precio.
+  const { data: types } = await db
+    .from('asset_metadata')
+    .select('symbol, asset_type')
+    .in('symbol', quotes.map((q) => q.symbol))
+
+  const typeBySymbol = new Map((types ?? []).map((t) => [t.symbol as string, t.asset_type as string]))
+  const fxRows = await computeImpliedFx(
+    db,
+    token,
+    quotes.map((q) => ({
+      symbol: q.symbol,
+      arsPrice: q.price,
+      assetType: typeBySymbol.get(q.symbol) ?? null,
+    })),
+    'fetch-market-quotes',
+  )
+
   const weekly = await weeklyChange(
     quotes.map((q) => q.symbol),
     new Map(quotes.map((q) => [q.symbol, q.price])),
@@ -305,6 +333,10 @@ async function handle(req: Request): Promise<Response> {
   )
   if (quotesError) throw quotesError
 
+  // Después del upsert de cotizaciones, no antes: así el implícito no puede
+  // quedar pisado por una fila de precios que se escribe encima.
+  await saveImpliedFx(db, fxRows, 'fetch-market-quotes')
+
   // El cierre del día alimenta la variación semanal de las próximas corridas
   const today = todayBA()
   const { error: historyError } = await db.from('price_history').upsert(
@@ -317,6 +349,7 @@ async function handle(req: Request): Promise<Response> {
     ok: true,
     quoted: quotes.length,
     withWeekly: weekly.size,
+    withImpliedFx: fxRows.length,
     universe: universeSync,
     failed,
   })

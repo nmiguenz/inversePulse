@@ -128,6 +128,34 @@ export type AdvisorContext = {
   liquidNow?: number;
   /** Perfil del inversor — sin esto el asesor no sabe a quién le habla */
   profile?: InvestorProfile;
+  /**
+   * Días desde la PRIMERA compra de cada posición.
+   *
+   * Alimenta la regla de los 14 días: una tesis necesita tiempo antes de
+   * liquidarla. Un símbolo sin operación registrada queda afuera del mapa, y
+   * entonces la regla no aplica — es el lado seguro del error, porque nunca
+   * marca como "nueva" una posición vieja que el backfill no alcanzó.
+   */
+  positionAges?: Record<string, number>;
+  /**
+   * Cuánto se espera que se mueva cada activo.
+   *
+   * Reemplaza a la implied volatility de opciones, que en BCBA no existe para
+   * CEDEARs (solo cotizan opciones las acciones locales). `vol30d` es la
+   * volatilidad REALIZADA de los últimos 30 días, anualizada, en %.
+   */
+  expectedMove?: Record<string, { vol30d: number; earningsInDays?: number }>;
+  /**
+   * Dólar implícito contra el MEP de mercado.
+   *
+   * Cubre lo que tenés Y el universo sugerible: la prima decide sobre todo una
+   * COMPRA, y lo que se compra sale del universo. Los FCI quedan afuera porque
+   * no tienen par en dólares.
+   */
+  dollarPremium?: Record<
+    string,
+    { implicit: number; mep: number; premiumPct: number }
+  >;
 };
 
 export type PortfolioContext = {
@@ -408,6 +436,16 @@ function buildOpportunitySystemPrompt(profile?: InvestorProfile) {
     `Sos analista financiero con perfil ${isAggressive ? "AGRESIVO orientado a crecimiento" : "MODERADO balanceado"},`,
     "especializado en CEDEARs argentinos. Detectás oportunidades concretas de inversión.",
     "",
+    // Va arriba de todo, no al final: enterrada abajo se cumplía a medias y
+    // el cupo de 3 se llenaba igual.
+    [
+      "ANTES QUE NADA:",
+      "Si no hay ninguna oportunidad que justifique mover plata hoy, devolvé un array",
+      "vacío. No completes el cupo de 3 por completarlo. Es MEJOR devolver 0 oportunidades",
+      "que devolver 3 mediocres. El usuario ve estas sugerencias y puede actuar — una",
+      "sugerencia mediocre que se ejecuta es peor que ninguna sugerencia.",
+    ].join("\n"),
+    "",
     profile?.objective ? `OBJETIVO DEL INVERSOR: ${profile.objective}` : "",
     "",
     profile?.preferredSectors?.length
@@ -435,8 +473,6 @@ function buildOpportunitySystemPrompt(profile?: InvestorProfile) {
         ].join("\n"),
     "",
     "Devolvé como máximo 3 oportunidades, y solo donde tengas convicción real.",
-    "Si no hay ninguna que justifique mover plata hoy, devolvé un array vacío:",
-    "no completes el cupo por completarlo.",
     "",
     "Tené en cuenta la concentración actual de la cartera: sugerir más de un sector",
     "que ya pesa demasiado empeora el riesgo en vez de mejorarlo.",
@@ -603,11 +639,42 @@ function buildAdvisorSystemPrompt(ctx: AdvisorContext) {
   const isAggressive = profile?.riskProfile === "aggressive";
   const settings = ctx.settings;
 
+  // La volatilidad "alta" es relativa a la cartera, no un número fijo: 40%
+  // anualizado es muchísimo para KO y poco para TSLA. Se le pasa la mediana
+  // para que el modelo calibre contra lo que el usuario realmente tiene.
+  const vols = Object.values(ctx.expectedMove ?? {})
+    .map((e) => e.vol30d)
+    .sort((a, b) => a - b);
+  const hasExpectedMove = vols.length > 0;
+  const medianVol = hasExpectedMove ? vols[Math.floor(vols.length / 2)] : 0;
+  const hasDollarPremium =
+    Object.keys(ctx.dollarPremium ?? {}).length > 0;
+
   return [
     // ── Identidad del asesor, adaptada al perfil del usuario ──
     `Sos asesor financiero con perfil ${isAggressive ? "AGRESIVO orientado a maximizar crecimiento" : "MODERADO equilibrado"},`,
     "especializado en CEDEARs argentinos.",
     "Tu trabajo es recomendar ACCIONES concretas sobre esta cartera, no describirla.",
+    "",
+
+    // ── Regla #0: el silencio es una respuesta válida ──
+    // Va primera y sola porque es la que más se incumplía: el asesor llenaba
+    // las 3 recomendaciones siempre, y el usuario leía eso como "hay 3 cosas
+    // que hacer hoy". El resultado era over-trading.
+    [
+      "REGLA #0 — LA MÁS IMPORTANTE DE TODAS:",
+      "No recomendar es una recomendación válida y PREFERIBLE cuando no hay motivo real.",
+      "Si ningún umbral se activó, ninguna noticia cambia una tesis, y no hay un pullback",
+      "claro en un activo sólido, la respuesta correcta es UNA SOLA recomendación con",
+      'action "hold" que explique por qué no hay nada que hacer hoy.',
+      "",
+      "NO llenes las 3 recomendaciones por llenarlas. El usuario confía en vos para tomar",
+      "decisiones con plata real. Cada recomendación de más es ruido que erosiona esa",
+      "confianza. Si tenés 1 buena y 2 mediocres, mandá solo la buena.",
+      "",
+      'Preguntate antes de cada recomendación: "¿apostaría MI plata a esto hoy?"',
+      'Si la respuesta es "probablemente no" o "depende", no la incluyas.',
+    ].join("\n"),
     "",
 
     // ── Perfil del inversor ──
@@ -680,6 +747,38 @@ function buildAdvisorSystemPrompt(ctx: AdvisorContext) {
       : "",
     "",
 
+    // ── Timing: qué NO se puede vender, y por qué ──
+    // Van ANTES de las rotaciones a propósito: el rebalanceo es la regla que
+    // más veces empujó a vender en rojo, así que primero tiene que quedar
+    // claro qué está vedado y recién después cómo se arma la rotación.
+    [
+      "REGLAS DE TIMING (INNEGOCIABLES — aplican antes que cualquier rebalanceo):",
+      "",
+      "1. NUNCA sugieras vender un activo que cayó más de -3% esta semana para",
+      "   rebalancear. El rebalanceo se hace VENDIENDO GANADORES, no perdedores.",
+      "   Si tech pesa 59% porque todo lo demás cayó más, la solución es comprar",
+      "   otros sectores con cash, NO vender tech en baja. Vender en rojo para",
+      "   cumplir un % es destruir valor para satisfacer una métrica.",
+      "",
+      "2. NUNCA sugieras liquidar una posición que se compró hace menos de 14 días.",
+      "   Una tesis necesita tiempo para desarrollarse. Si pesa poco, la acción",
+      "   correcta es REFORZAR, no liquidar. Indicá que es nueva y que conviene",
+      "   esperar.",
+      "",
+      "3. Antes de cualquier rebalanceo, evaluá POR QUÉ se excede el límite:",
+      "   - ¿El sector subió mucho? → Trimear el que más ganó (toma parcial)",
+      "   - ¿Todo lo demás bajó? → Comprar otros sectores con cash disponible",
+      "   - ¿Se agregaron posiciones nuevas? → Esperar, la cartera se está armando",
+      "   Explicá cuál de las tres situaciones aplica en el reasoning.",
+      "",
+      "4. Los umbrales (trailing, stop loss, techo) son ALERTAS, no órdenes automáticas.",
+      "   Que tech pese 59% con límite de 55% no significa \"vendé tech ya\".",
+      '   Significa "no COMPRES más tech hasta que baje del 55%". Solo se vende',
+      "   activamente si el exceso es >10 puntos por encima del límite O si hay",
+      "   un ganador con rendimiento superior al techo fijo de ganancia para trimear.",
+    ].join("\n"),
+    "",
+
     // ── Rotaciones y rebalanceos ──
     "ROTACIONES Y REBALANCEOS — SIEMPRE CON LAS DOS PATAS:",
     'Un "rebalance" sin decir de dónde sale la plata es inaccionable. En cada uno:',
@@ -712,6 +811,37 @@ function buildAdvisorSystemPrompt(ctx: AdvisorContext) {
         ].join("\n"),
     "",
 
+    // ── Cómo leer los datos que se agregaron a cada posición ──
+    // Condicionales: si el CRON todavía no pobló el dato, explicar cómo
+    // interpretarlo solo invita a que el modelo lo invente.
+    hasExpectedMove
+      ? [
+          "MOVIMIENTO ESPERADO (en la línea de cada posición):",
+          "Volatilidad REALIZADA de los últimos 30 días, anualizada, más los días que",
+          "faltan para el próximo earnings cuando está cerca.",
+          `La mediana de esta cartera es ${medianVol.toFixed(0)}%: "alta" es notablemente`,
+          "por encima de ese número, no un valor fijo — 40% es mucho para un defensivo",
+          "y poco para un semiconductor.",
+          "NO es señal de compra ni de venta por sí sola. Es contexto para calibrar el",
+          "riesgo de la recomendación:",
+          "- Si sugerís comprar algo con volatilidad alta o earnings en menos de 7 días,",
+          "  mencionalo: el precio puede moverse fuerte en cualquier dirección.",
+          "- Si sugerís hold, una volatilidad baja confirma que no se espera movimiento.",
+        ].join("\n")
+      : "",
+    hasDollarPremium
+      ? [
+          "TC IMPLÍCITO (tipo de cambio implícito del CEDEAR vs MEP de mercado):",
+          '- Prima > +3%: el CEDEAR está "caro" en pesos respecto al dólar. No es buen',
+          "  momento para comprar en ARS — mejor esperar a que la prima baje.",
+          '- Prima < -3%: el CEDEAR está "barato" en pesos. Puede ser oportunidad.',
+          "- Entre -3% y +3%: neutral, no es factor.",
+          "Usá esto como filtro: si vas a sugerir una compra y la prima es > +5%, mencioná",
+          "que el precio en pesos está inflado y que conviene esperar.",
+        ].join("\n")
+      : "",
+    "",
+
     // ── Condición de salida obligatoria ──
     "REGLA FINAL:",
     "En el reasoning incluí SIEMPRE qué te haría cambiar de opinión.",
@@ -732,10 +862,33 @@ export async function advise(
   if (!apiKey) throw new MissingApiKeyError();
 
   const positionLines = ctx.positions
-    .map(
-      (p) =>
-        `${p.symbol} (${p.sector}, ${p.assetType}): ${fmtArs(p.value)} · ${p.weight.toFixed(1)}% de la cartera · P/L ${p.gainPct.toFixed(1)}% · hoy ${p.dayPct.toFixed(1)}% · 30d ${p.trend30d}`,
-    )
+    .map((p) => {
+      // Cada sufijo se omite cuando falta el dato: una línea que dice
+      // "posición desde hace undefined días" es peor que no decir nada.
+      const age = ctx.positionAges?.[p.symbol];
+      const ageStr =
+        age !== undefined ? ` · posición desde hace ${age} días` : "";
+
+      const em = ctx.expectedMove?.[p.symbol];
+      const emStr = em
+        ? ` · vol 30d ${em.vol30d.toFixed(0)}%` +
+          (em.earningsInDays !== undefined && em.earningsInDays <= 7
+            ? ` · earnings en ${em.earningsInDays} días`
+            : "")
+        : "";
+
+      const dp = ctx.dollarPremium?.[p.symbol];
+      const dpStr = dp
+        ? ` · TC implícito $${dp.implicit.toFixed(0)} (${dp.premiumPct > 0 ? "+" : ""}${dp.premiumPct.toFixed(1)}% vs MEP)`
+        : "";
+
+      return (
+        `${p.symbol} (${p.sector}, ${p.assetType}): ${fmtArs(p.value)} · ${p.weight.toFixed(1)}% de la cartera · P/L ${p.gainPct.toFixed(1)}% · hoy ${p.dayPct.toFixed(1)}% · 30d ${p.trend30d}` +
+        ageStr +
+        emStr +
+        dpStr
+      );
+    })
     .join("\n");
 
   const user = [
@@ -764,10 +917,16 @@ export async function advise(
     "",
     "ACTIVOS QUE PODÉS SUGERIR (con precio actual):",
     ctx.universe
-      .map(
-        (u) =>
-          `${u.symbol} — ${u.name} (${u.sector})${u.price ? ` · ${fmtArs(u.price)}` : ""}`,
-      )
+      .map((u) => {
+        // La prima acá pesa más que sobre la cartera: sobre lo que ya tenés es
+        // información, sobre lo que podrías comprar es una decisión concreta de
+        // ejecución — comprar en pesos o dolarizarse primero.
+        const dp = ctx.dollarPremium?.[u.symbol];
+        const dpStr = dp
+          ? ` · TC implícito ${dp.premiumPct > 0 ? "+" : ""}${dp.premiumPct.toFixed(1)}% vs MEP`
+          : "";
+        return `${u.symbol} — ${u.name} (${u.sector})${u.price ? ` · ${fmtArs(u.price)}` : ""}${dpStr}`;
+      })
       .join("\n"),
   ]
     .filter(Boolean)

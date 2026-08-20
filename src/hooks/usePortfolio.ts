@@ -14,6 +14,7 @@ import type { AccountBalance, DollarRate, IolStatus, Position, PricePoint } from
 import { withMetrics } from '@/lib/portfolio'
 
 type Snapshot = { snapshot_date: string; total_value: number }
+type ImpliedFxQuote = { symbol: string; implied_fx: number | null }
 
 type PortfolioData = {
   positions: Position[]
@@ -22,6 +23,7 @@ type PortfolioData = {
   history: PricePoint[]
   snapshots: Snapshot[]
   iolStatus: IolStatus | null
+  quotes: ImpliedFxQuote[]
 }
 
 const EMPTY: PortfolioData = {
@@ -31,6 +33,7 @@ const EMPTY: PortfolioData = {
   history: [],
   snapshots: [],
   iolStatus: null,
+  quotes: [],
 }
 
 type PortfolioState = {
@@ -77,7 +80,7 @@ export function PortfolioProvider({ children }: { children: ReactNode }) {
       return
     }
 
-    const [positions, balance, rates, history, snapshots, iolStatus] = await Promise.all([
+    const [positions, balance, rates, history, snapshots, iolStatus, quotes] = await Promise.all([
       supabase.from('positions').select('*').eq('user_id', userId),
       supabase.from('account_balance').select('*').eq('user_id', userId).maybeSingle(),
       // Una fila por tipo: se ordena por fecha y se deduplica abajo
@@ -90,6 +93,9 @@ export function PortfolioProvider({ children }: { children: ReactNode }) {
         .gte('snapshot_date', since(90))
         .order('snapshot_date'),
       supabase.from('iol_status').select('*').maybeSingle(),
+      // Dólar implícito por CEDEAR. Tabla global (no lleva user_id): el
+      // implícito de NVDA es el mismo para todos.
+      supabase.from('market_quotes').select('symbol, implied_fx'),
     ])
 
     const firstError = [positions, balance, rates, history].find((r) => r.error)?.error
@@ -102,6 +108,7 @@ export function PortfolioProvider({ children }: { children: ReactNode }) {
       history: (history.data ?? []) as PricePoint[],
       snapshots: (snapshots.data ?? []) as Snapshot[],
       iolStatus: (iolStatus.data ?? null) as IolStatus | null,
+      quotes: (quotes.data ?? []) as ImpliedFxQuote[],
     })
     setLoading(false)
   }, [userId])
@@ -126,14 +133,21 @@ export function PortfolioProvider({ children }: { children: ReactNode }) {
     }
   }, [userId, load])
 
-  const positions = useMemo(() => withMetrics(data.positions), [data.positions])
-
   /** Última cotización por tipo de dólar */
   const latestRates = useMemo(() => {
     const map = new Map<string, DollarRate>()
     for (const r of data.rates) if (!map.has(r.rate_type)) map.set(r.rate_type, r)
     return map
   }, [data.rates])
+
+  // Va después de latestRates porque necesita el MEP para la prima: sin MEP de
+  // mercado el implícito es un número suelto que no dice si está caro o barato.
+  const positions = useMemo(() => {
+    const bySymbol = new Map<string, number>()
+    for (const q of data.quotes) if (q.implied_fx) bySymbol.set(q.symbol, q.implied_fx)
+    const mep = latestRates.get('mep')?.sell_price ?? 0
+    return withMetrics(data.positions, { bySymbol, mep })
+  }, [data.positions, data.quotes, latestRates])
 
   /** Serie de cierres por símbolo, ordenada por fecha */
   const historyBySymbol = useMemo(() => {

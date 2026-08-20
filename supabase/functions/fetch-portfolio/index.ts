@@ -11,7 +11,14 @@
  * conectada se saltea: no hay credenciales globales de respaldo.
  */
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
-import { getAccessToken, iol, NoConnectionError, type IolActivo } from '../_shared/iol.ts'
+import {
+  getAccessToken,
+  iol,
+  NoConnectionError,
+  PUBLIC_API,
+  type IolActivo,
+} from '../_shared/iol.ts'
+import { computeImpliedFx, saveImpliedFx } from '../_shared/impliedFx.ts'
 import { isServiceRole, unauthorized, userIdFromJwt } from '../_shared/auth.ts'
 import { jsonWithCors, preflight } from '../_shared/cors.ts'
 import {
@@ -32,6 +39,77 @@ const db = createClient(
 /** Fecha de hoy en Buenos Aires (el mercado local define el día del snapshot) */
 function todayBA(): string {
   return new Date().toLocaleDateString('en-CA', { timeZone: 'America/Argentina/Buenos_Aires' })
+}
+
+/**
+ * Prima cambiaria de lo que tenés en cartera.
+ *
+ * La lógica vive en `_shared/impliedFx.ts` porque `fetch-market-quotes` la
+ * necesita también, para el universo sugerible. Acá va solo lo que tenés: es
+ * lo que el asesor necesita fresco, porque el implícito se mueve durante la
+ * rueda.
+ */
+async function syncImpliedFx(token: string, activos: IolActivo[]) {
+  const rows = await computeImpliedFx(
+    db,
+    token,
+    activos.map((a) => ({
+      symbol: a.titulo.simbolo,
+      arsPrice: a.ultimoPrecio,
+      assetType: toAssetType(a.titulo.tipo),
+    })),
+    'fetch-portfolio',
+  )
+  await saveImpliedFx(db, rows, 'fetch-portfolio')
+}
+
+/**
+ * Sondeo de stop loss / take profit. NO escribe nada.
+ *
+ * El conector MCP de IOL expone `get_stop_loss_and_take_profit` y funciona
+ * —devolvió `{"result":[]}`—, pero pega contra `gateway-api-internal`, que
+ * NO EXISTE en DNS público: el nombre no resuelve en 1.1.1.1 ni en 8.8.8.8
+ * (solo matchea con `.com.ar` agregado, que es un catch-all de typosquatting).
+ * O sea que ese host es alcanzable desde adentro de la red de IOL y no desde
+ * una Edge Function, así que ni se intenta: sondearlo solo colgaba la función
+ * hasta agotar el presupuesto de cómputo.
+ *
+ * Queda una sola pregunta: si la API PÚBLICA expone stop loss / take profit
+ * con alguno de estos nombres. Si todo da 404, la funcionalidad no se puede
+ * construir sobre esta conexión y hay que decirlo, no dejar UI colgada de una
+ * ruta que no responde.
+ *
+ * Solo lista: ningún candidato crea ni borra órdenes. En paralelo y con
+ * timeout corto porque una Edge Function tiene presupuesto de wall-clock.
+ */
+const PROBE_TIMEOUT_MS = 6000
+
+async function probeStopLoss(token: string) {
+  const paths = [
+    '/api/v2/Alertas',
+    '/api/v2/alertas',
+    '/api/v2/StopLoss',
+    '/api/v2/TakeProfit',
+    '/api/v2/operar/StopLoss',
+    '/api/v2/MiCuenta/Alertas',
+  ]
+
+  return await Promise.all(
+    paths.map(async (path) => {
+      try {
+        const res = await fetch(`${PUBLIC_API}${path}`, {
+          headers: { Authorization: `Bearer ${token}`, Accept: 'application/json' },
+          signal: AbortSignal.timeout(PROBE_TIMEOUT_MS),
+        })
+        // El cuerpo se recorta: un 404 de ASP.NET devuelve una página entera
+        // de HTML y no aporta nada al sondeo.
+        const body = (await res.text().catch(() => '')).slice(0, 300)
+        return { path, status: res.status, ok: res.ok, body }
+      } catch (err) {
+        return { path, status: 'sin respuesta', ok: false, body: String(err).slice(0, 200) }
+      }
+    }),
+  )
 }
 
 async function syncUser(userId: string) {
@@ -110,6 +188,10 @@ async function syncUser(userId: string) {
     )
     if (error) throw error
   }
+
+  // Prima cambiaria de los CEDEARs. Va acá y no en fetch-market-quotes porque
+  // el asesor la necesita fresca: el implícito se mueve durante la rueda.
+  await syncImpliedFx(token, activos)
 
   // Balance — la cuenta en pesos es la de referencia del dashboard
   const cuentaArs = estado.cuentas?.find((c) => c.moneda?.toLowerCase().includes('peso'))
@@ -283,6 +365,35 @@ Deno.serve(async (req) => {
   const usersQuery = db.from('users').select('id')
   const { data: users, error } = await (callerId ? usersQuery.eq('id', callerId) : usersQuery)
   if (error) return jsonWithCors({ error: error.message }, { status: 500 })
+
+  // Sondeo de stop loss / take profit: solo lectura, y contra la conexión de
+  // quien llama. Corta antes de sincronizar porque no es una sincronización.
+  if (new URL(req.url).searchParams.get('probe') === 'sltp') {
+    // NO `users[0]`: con varios usuarios, el primero puede ser alguien que
+    // nunca conectó IOL y el sondeo muere antes de probar nada. Es la misma
+    // trampa que ya documenta fetch-market-quotes. Se busca por la columna
+    // cifrada además de la vieja, que desde la 0019 queda en NULL.
+    const { data: connected } = await db
+      .from('iol_credentials')
+      .select('user_id')
+      .or('refresh_token_enc.not.is.null,refresh_token.not.is.null')
+      .order('last_sync_at', { ascending: false, nullsFirst: false })
+      .limit(1)
+
+    const probeUserId = callerId ?? connected?.[0]?.user_id
+    if (!probeUserId) {
+      return jsonWithCors({ error: 'ninguna cuenta de IOL conectada' }, { status: 404 })
+    }
+    try {
+      const token = await getAccessToken(db, probeUserId)
+      return jsonWithCors({ ok: true, stopLoss: await probeStopLoss(token) })
+    } catch (err) {
+      return jsonWithCors(
+        { error: err instanceof Error ? err.message : String(err) },
+        { status: 502 },
+      )
+    }
+  }
 
   const results: Record<string, unknown> = {}
 

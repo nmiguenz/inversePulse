@@ -208,6 +208,13 @@ export type PositionMetrics = Position & {
   gainPct: number
   /** peso sobre el total de la cartera, en % */
   weight: number
+  /**
+   * Dólar implícito del CEDEAR (precio ARS ÷ precio en dólar MEP).
+   * Solo los CEDEARs tienen par en dólares: en FCI y bonos queda undefined.
+   */
+  impliedFx?: number
+  /** Prima del implícito sobre el MEP de mercado, en %. Positiva = caro en pesos. */
+  fxPremiumPct?: number
 }
 
 export type SectorSlice = {

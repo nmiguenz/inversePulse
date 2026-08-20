@@ -17,7 +17,7 @@ export function AssetDetail() {
   const navigate = useNavigate()
   const { session } = useAuth()
   const { positions, historyBySymbol, loading } = usePortfolio()
-  const { format, currency } = useCurrency()
+  const { format, currency, mep } = useCurrency()
   const [news, setNews] = useState<NewsItem[]>([])
 
   const position = useMemo(
@@ -132,6 +132,13 @@ export function AssetDetail() {
             hint={committed > 0 ? 'El resto está reservado por órdenes puestas' : undefined}
           />
           <Row label="Peso en la cartera" value={`${position.weight.toFixed(1)}%`} />
+          {position.impliedFx != null && position.fxPremiumPct != null && (
+            <Row
+              label="Dólar implícito"
+              value={`${formatARS(position.impliedFx)} · ${formatPct(position.fxPremiumPct)}`}
+              hint={fxHint(position.fxPremiumPct, mep)}
+            />
+          )}
           <Row
             label="Sector"
             value={position.sector}
@@ -171,6 +178,27 @@ export function AssetDetail() {
       </button>
     </div>
   )
+}
+
+/**
+ * Explica la prima cambiaria en una línea.
+ *
+ * El badge del Dashboard solo puede mostrar "TC −3,6%", que sin contexto no
+ * significa nada. Acá hay lugar para decir qué implica y, sobre todo, qué NO
+ * implica: es una diferencia entre las dos puertas de entrada al mismo papel,
+ * no una opinión sobre si el activo está barato.
+ */
+function fxHint(premiumPct: number, mep: number | null): string {
+  const ref = mep && mep > 0 ? ` (MEP ${formatARS(mep)})` : ''
+  const magnitud = Math.abs(premiumPct).toFixed(1)
+
+  if (premiumPct <= -3) {
+    return `Comprarlo en pesos sale ${magnitud}% más barato que pasar a dólar MEP${ref} y comprar la versión en dólares. No dice que el activo esté barato: dice por qué puerta conviene entrar.`
+  }
+  if (premiumPct >= 3) {
+    return `Comprarlo en pesos sale ${magnitud}% más caro que pasar a dólar MEP${ref} y comprar la versión en dólares. Si querés sumar, conviene esperar a que la prima baje.`
+  }
+  return `En línea con el MEP${ref}: la diferencia se la come el spread, así que no cambia por dónde entrar.`
 }
 
 function Row({
