@@ -115,10 +115,25 @@ para que el par entre en 5:
 La abreviatura **no se puede derivar**: `GOOGL` tira la segunda `O` y `TZXD6`
 tira la `Z`. Por eso se curan una por una en vez de intentar una regla.
 
-Las excepciones se cargan en `asset_metadata.dollar_symbol` (NULL = usar la
-convención). El valor correcto sale de `related_symbols.dollar` en el detalle
-del activo. `syncImpliedFx` loguea en warning cualquier ticker que no resuelva,
-así una excepción nueva aparece en vez de desaparecer.
+Las excepciones viven en `asset_metadata.dollar_symbol` (NULL = usar la
+convención), pero **no hay que cargarlas a mano**: si el ticker por convención
+falla, `computeImpliedFx` prueba los candidatos de "borrar un carácter y
+agregar D" —que es la única operación que distingue a las excepciones
+conocidas— y guarda el que funciona.
+
+La red de seguridad es el MEP: un candidato podría resolver a otro instrumento
+real, así que se descarta cualquiera cuyo implícito quede a más de 20% del MEP
+de mercado. Probado borrando los overrides de `GOOGL` y `TZXD6`: la corrida
+siguiente redescubrió `GOGLD` y `TXD6D` y los volvió a persistir.
+
+> El detalle del título de la API pública **no sirve** para esto: sondeado,
+> devuelve solo `descripcion, mercado, moneda, pais, plazo, simbolo, tipo`. No
+> hay campo de símbolos relacionados — eso lo arma el conector MCP por su
+> cuenta.
+
+Lo que aun así no resuelva queda en un warning con el ticker intentado, y
+`POST /functions/v1/fetch-portfolio?probe=fx` lo devuelve por HTTP (el CLI de
+Supabase no tiene `functions logs`).
 
 **Esto no es solo de CEDEARs.** Los bonos tienen par (`TZXD6` → `TXD6D`) y las
 acciones locales también (`GGAL` → `GGALD`). Los únicos que realmente no tienen

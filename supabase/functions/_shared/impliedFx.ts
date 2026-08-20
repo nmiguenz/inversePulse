@@ -55,6 +55,73 @@ async function dollarTickers(
   return new Map((data ?? []).map((o) => [o.symbol as string, o.dollar_symbol as string]))
 }
 
+
+/**
+ * Qué tan lejos del MEP puede caer un implícito antes de ser sospechoso.
+ *
+ * Las primas reales viven en ±5%. Un 20% deja margen de sobra para un día
+ * dislocado y sigue descartando un ticker que resolvió a OTRO instrumento.
+ */
+const MAX_DESVIO_MEP = 0.20
+
+/**
+ * Descubre el par en dólares de un símbolo fuera de convención.
+ *
+ * Las excepciones conocidas son todas la misma operación: borrar un carácter y
+ * agregar la D (GOOGL→GOGLD tira la segunda O, TZXD6→TXD6D tira la Z). No se
+ * puede saber CUÁL carácter, pero son pocos candidatos, así que se prueban.
+ *
+ * El detalle del título en la API pública NO sirve para esto: devuelve solo
+ * descripcion, mercado, moneda, pais, plazo, simbolo y tipo — sondeado, no hay
+ * campo de símbolos relacionados.
+ *
+ * La red de seguridad es el MEP: un candidato que resolvió a otro instrumento
+ * da un implícito absurdo, y se descarta. Sin esto, "borrar un carácter" podría
+ * pegarle a un ticker real que no tiene nada que ver.
+ */
+async function discoverDollarTicker(
+  token: string,
+  symbol: string,
+  arsPrice: number,
+  mep: number,
+): Promise<{ ticker: string; usd: number } | null> {
+  if (mep <= 0 || symbol.length < 4) return null
+
+  const candidatos = new Set<string>()
+  for (let i = 0; i < symbol.length; i++) {
+    candidatos.add(symbol.slice(0, i) + symbol.slice(i + 1) + 'D')
+  }
+
+  for (const ticker of candidatos) {
+    try {
+      const raw = await iol.cotizacion(token, ticker, 'bCBA', 't1')
+      const usd = typeof raw.ultimoPrecio === 'number' ? raw.ultimoPrecio : null
+      if (usd === null || usd <= 0) continue
+      const desvio = Math.abs(arsPrice / usd / mep - 1)
+      if (desvio <= MAX_DESVIO_MEP) return { ticker, usd }
+      console.warn(
+        `[impliedFx] ${symbol}: ${ticker} cotiza pero da un implícito ${(desvio * 100).toFixed(0)}% ` +
+          'lejos del MEP. Es otro instrumento, se descarta.',
+      )
+    } catch {
+      // Candidato inexistente: es lo esperado en casi todos.
+    }
+  }
+  return null
+}
+
+/** Último MEP de mercado, para validar lo que se descubre. */
+async function mepRate(db: SupabaseClient): Promise<number> {
+  const { data } = await db
+    .from('dollar_rates')
+    .select('sell_price')
+    .eq('rate_type', 'mep')
+    .order('recorded_at', { ascending: false })
+    .limit(1)
+    .maybeSingle()
+  return data?.sell_price ?? 0
+}
+
 /**
  * Cotiza el par en dólares de cada activo y calcula el implícito.
  *
@@ -72,9 +139,14 @@ export async function computeImpliedFx(
   const usable = inputs.filter((i) => i.arsPrice > 0 && !SIN_PAR.has(i.assetType ?? ''))
   if (!usable.length) return []
 
-  const overrides = await dollarTickers(db, usable.map((i) => i.symbol))
+  const [overrides, mep] = await Promise.all([
+    dollarTickers(db, usable.map((i) => i.symbol)),
+    mepRate(db),
+  ])
   const rows: FxRow[] = []
   const unresolved: string[] = []
+  /** Lo que se descubrió solo, para no volver a buscarlo la próxima corrida. */
+  const aprendidos: Array<{ symbol: string; dollar_symbol: string }> = []
 
   for (let i = 0; i < usable.length; i += BATCH) {
     await Promise.all(
@@ -96,10 +168,36 @@ export async function computeImpliedFx(
             implied_fx_at: new Date().toISOString(),
           })
         } catch {
-          unresolved.push(`${symbol}→${ticker}`)
+          // El ticker por convención no existe. Antes de rendirse, se buscan
+          // los candidatos de "borrar un carácter": es lo único que distingue
+          // a las excepciones conocidas.
+          const found = await discoverDollarTicker(token, symbol, arsPrice, mep)
+          if (!found) {
+            unresolved.push(`${symbol}→${ticker}`)
+            return
+          }
+          console.log(`[${tag}] ${symbol}: par en dólares descubierto → ${found.ticker}`)
+          aprendidos.push({ symbol, dollar_symbol: found.ticker })
+          rows.push({
+            symbol,
+            usd_price: found.usd,
+            implied_fx: arsPrice / found.usd,
+            implied_fx_at: new Date().toISOString(),
+          })
         }
       }),
     )
+  }
+
+  // Se guarda lo descubierto: la próxima corrida sale por el override y no
+  // vuelve a gastar los intentos. Solo UPDATE — si el símbolo no está en el
+  // universo curado, no es esta función la que decide meterlo.
+  for (const a of aprendidos) {
+    const { error } = await db
+      .from('asset_metadata')
+      .update({ dollar_symbol: a.dollar_symbol })
+      .eq('symbol', a.symbol)
+    if (error) console.warn(`[${tag}] no se pudo guardar ${a.symbol}→${a.dollar_symbol}: ${error.message}`)
   }
 
   if (unresolved.length) {

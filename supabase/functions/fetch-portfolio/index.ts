@@ -112,6 +112,48 @@ async function probeStopLoss(token: string) {
   )
 }
 
+/**
+ * Diagnóstico del dólar implícito. NO escribe nada.
+ *
+ * `computeImpliedFx` traga los errores a propósito —es un enriquecimiento, no
+ * puede tumbar el sync— y los resume en un warning. Cuando el warning no
+ * alcanza (el CLI de Supabase no expone `functions logs`), esto devuelve por
+ * HTTP el ticker que se intentó y el error crudo de cada símbolo.
+ */
+async function probeFx(userId: string) {
+  const token = await getAccessToken(db, userId)
+  const portfolio = await iol.portfolio(token)
+  const activos: IolActivo[] = portfolio.activos ?? []
+
+  const { data: overrides } = await db
+    .from('asset_metadata')
+    .select('symbol, dollar_symbol')
+    .not('dollar_symbol', 'is', null)
+  const override = new Map((overrides ?? []).map((o) => [o.symbol as string, o.dollar_symbol as string]))
+
+  return await Promise.all(
+    activos.map(async (a) => {
+      const symbol = a.titulo.simbolo
+      const assetType = toAssetType(a.titulo.tipo)
+      const ticker = override.get(symbol) ?? `${symbol}D`
+      if (assetType === 'FCI') return { symbol, assetType, skipped: 'los FCI no tienen par' }
+      try {
+        const raw = await iol.cotizacion(token, ticker, 'bCBA', 't1')
+        return {
+          symbol,
+          assetType,
+          ticker,
+          ok: true,
+          ultimoPrecio: raw.ultimoPrecio ?? null,
+          arsPrice: a.ultimoPrecio,
+        }
+      } catch (err) {
+        return { symbol, assetType, ticker, ok: false, error: String(err).slice(0, 220) }
+      }
+    }),
+  )
+}
+
 async function syncUser(userId: string) {
   const token = await getAccessToken(db, userId)
   const [portfolio, estado] = await Promise.all([iol.portfolio(token), iol.estadoCuenta(token)])
@@ -368,6 +410,18 @@ Deno.serve(async (req) => {
 
   // Sondeo de stop loss / take profit: solo lectura, y contra la conexión de
   // quien llama. Corta antes de sincronizar porque no es una sincronización.
+  if (new URL(req.url).searchParams.get('probe') === 'fx') {
+    const { data: conn } = await db
+      .from('iol_credentials')
+      .select('user_id')
+      .or('refresh_token_enc.not.is.null,refresh_token.not.is.null')
+      .order('last_sync_at', { ascending: false, nullsFirst: false })
+      .limit(1)
+    const id = callerId ?? conn?.[0]?.user_id
+    if (!id) return jsonWithCors({ error: 'ninguna cuenta de IOL conectada' }, { status: 404 })
+    return jsonWithCors({ ok: true, fx: await probeFx(id) })
+  }
+
   if (new URL(req.url).searchParams.get('probe') === 'sltp') {
     // NO `users[0]`: con varios usuarios, el primero puede ser alguien que
     // nunca conectó IOL y el sondeo muere antes de probar nada. Es la misma
