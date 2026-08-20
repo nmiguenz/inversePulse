@@ -21,6 +21,7 @@ type PushState = 'checking' | 'off' | 'on' | 'busy' | 'unsupported' | 'blocked'
 export function Settings() {
   const { session, signOut } = useAuth()
   const { iolStatus } = usePortfolio()
+  const [iolOpen, setIolOpen] = useState(false)
   const [push, setPush] = useState<PushState>('checking')
   const [pushError, setPushError] = useState('')
   const [theme, setTheme] = useState<ThemeChoice>(() => loadTheme())
@@ -62,12 +63,18 @@ export function Settings() {
 
   return (
     <div className="animate-fade-up space-y-4">
-      <div>
-        <SectionTitle icon="🔗">Tu cuenta de IOL</SectionTitle>
-        <Card>
-          <BrokerConnection />
-        </Card>
-      </div>
+      {/* Con la cuenta conectada y sincronizando, esta card repetía la fila de
+          "Más" que está al final. Queda solo cuando hay algo que hacer: conectar
+          por primera vez, o un error de sync, que es justo cuando hace falta
+          tener el botón de reconectar a la vista. */}
+      {(!iolStatus?.is_connected || iolStatus?.last_sync_error) && (
+        <div>
+          <SectionTitle icon="🔗">Tu cuenta de IOL</SectionTitle>
+          <Card>
+            <BrokerConnection />
+          </Card>
+        </div>
+      )}
 
       {/* Va antes de la API key y de los umbrales a propósito: es lo que
           decide QUÉ te recomienda el asesor, no cuánto gasta ni cuándo avisa. */}
@@ -163,23 +170,34 @@ export function Settings() {
             Metas: no es un ajuste, es una vista de datos, y enterrada en
             Configuración no la encontraba nadie desde el celular. */}
         <Card className="p-0">
-          <div className="flex items-center justify-between gap-3 px-4 py-3.5">
-            <span>
-              <span className="block text-[14px]">Cuenta IOL</span>
-              <span className="text-muted mt-0.5 block text-[12px]">
-                {iolStatus?.is_connected ? 'Conectada' : 'Sin conectar'}
-                {iolStatus?.last_sync_at &&
-                  ` · último sync ${new Date(iolStatus.last_sync_at).toLocaleTimeString('es-AR', {
-                    hour: '2-digit',
-                    minute: '2-digit',
-                  })}`}
+          {/* Conectada: la fila se despliega y trae reconectar/desconectar.
+              Sin conectar: es solo un estado, porque el formulario ya está en
+              la card de arriba y ofrecerlo dos veces es la duplicación que se
+              vino a sacar, nada más que en el otro estado. */}
+          {iolStatus?.is_connected ? (
+            <button
+              type="button"
+              onClick={() => setIolOpen((v) => !v)}
+              aria-expanded={iolOpen}
+              className="active:bg-hover flex w-full items-center justify-between gap-3 px-4 py-3.5 text-left transition-colors"
+            >
+              <IolSummary iolStatus={iolStatus} />
+              <span className="flex shrink-0 items-center gap-2">
+                <span className="text-muted text-[11px]">{iolOpen ? 'Ocultar' : 'Gestionar'}</span>
+                <span className="bg-gain h-2 w-2 rounded-full" aria-hidden />
               </span>
-            </span>
-            <span
-              className={`h-2 w-2 shrink-0 rounded-full ${iolStatus?.is_connected ? 'bg-gain' : 'bg-muted'}`}
-              aria-hidden
-            />
-          </div>
+            </button>
+          ) : (
+            <div className="flex w-full items-center justify-between gap-3 px-4 py-3.5">
+              <IolSummary iolStatus={iolStatus} />
+              <span className="bg-muted h-2 w-2 shrink-0 rounded-full" aria-hidden />
+            </div>
+          )}
+          {iolOpen && iolStatus?.is_connected && (
+            <div className="border-subtle border-t px-4 py-4">
+              <BrokerConnection />
+            </div>
+          )}
         </Card>
       </div>
 
@@ -200,5 +218,22 @@ export function Settings() {
         </Card>
       </div>
     </div>
+  )
+}
+
+/** Nombre y estado de la conexión, compartido por las dos variantes de la fila. */
+function IolSummary({ iolStatus }: { iolStatus: { is_connected?: boolean; last_sync_at?: string | null } | null }) {
+  return (
+    <span className="min-w-0">
+      <span className="block text-[14px]">Cuenta IOL</span>
+      <span className="text-muted mt-0.5 block text-[12px]">
+        {iolStatus?.is_connected ? 'Conectada' : 'Sin conectar'}
+        {iolStatus?.last_sync_at &&
+          ` · último sync ${new Date(iolStatus.last_sync_at).toLocaleTimeString('es-AR', {
+            hour: '2-digit',
+            minute: '2-digit',
+          })}`}
+      </span>
+    </span>
   )
 }

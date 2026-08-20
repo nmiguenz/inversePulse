@@ -131,6 +131,15 @@ export function ThresholdSettings() {
   const { session } = useAuth()
   const [settings, setSettings] = useState<Settings | null>(null)
   const [saving, setSaving] = useState(false)
+  /**
+   * Los sliders arrancan bloqueados.
+   *
+   * Un `input[type=range]` captura el gesto vertical: en el celular, scrollear
+   * la pantalla con el dedo encima de uno le cambia el valor sin querer, y
+   * estos umbrales deciden cuándo se avisa de vender. Un cambio accidental no
+   * se nota hasta que falta una alerta.
+   */
+  const [editing, setEditing] = useState(false)
   const [saved, setSaved] = useState(false)
   const [error, setError] = useState('')
 
@@ -205,6 +214,27 @@ export function ThresholdSettings() {
         </p>
       </div>
 
+      <div className="border-subtle flex items-center justify-between gap-3 border-t pt-4">
+        <div className="min-w-0">
+          <p className="text-secondary text-[12px] font-medium">Cuándo avisarte</p>
+          <p className="text-muted mt-0.5 text-[11px] leading-relaxed">
+            {editing
+              ? 'Se guarda solo al soltar cada control.'
+              : 'Bloqueados para que no se muevan al hacer scroll.'}
+          </p>
+        </div>
+        <button
+          type="button"
+          onClick={() => setEditing((v) => !v)}
+          aria-pressed={editing}
+          className={`shrink-0 rounded-xl border px-3.5 py-2 text-[13px] transition-colors ${
+            editing ? 'border-accent text-accent font-medium' : 'border-line text-secondary'
+          }`}
+        >
+          {editing ? 'Listo' : 'Editar'}
+        </button>
+      </div>
+
       {SLIDERS.map((slider) => {
         const value = Number(settings[slider.key])
         return (
@@ -227,7 +257,8 @@ export function ThresholdSettings() {
               // Se guarda al soltar, no en cada pixel del arrastre
               onPointerUp={() => void save(settings)}
               onKeyUp={() => void save(settings)}
-              className="accent-accent mt-2 w-full"
+              disabled={!editing}
+              className="accent-accent mt-2 w-full disabled:cursor-not-allowed disabled:opacity-40"
             />
           </div>
         )
