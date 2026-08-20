@@ -19,6 +19,8 @@ export type Snapshot = {
 
 type Mode = 'today' | 'weekly' | 'monthly'
 type Point = { key: string; value: number }
+/** Un hueco es un día sin rueda o todavía por venir: no es un cero. */
+type Slot = { key: string; value: number | null }
 
 const MODES: Array<{ id: Mode; label: string }> = [
   { id: 'today', label: 'Día' },
@@ -27,7 +29,7 @@ const MODES: Array<{ id: Mode; label: string }> = [
 ]
 
 /**
- * Cuánto se ganó o se perdió: hoy, por semana o por mes.
+ * Cuánto se ganó o se perdió: hoy, en la semana en curso, o por mes.
  *
  * Antes esto graficaba el VALOR total de la cartera. Ese gráfico responde
  * "cuánto tengo", que ya está arriba en letras grandes, y esconde lo que
@@ -47,10 +49,12 @@ const MODES: Array<{ id: Mode; label: string }> = [
  *
  * ── Por qué "Día" no es una serie ────────────────────────────────────────
  *
- * Una barra por día llenaba el celular de tiras de pocos píxeles, imposibles
- * de tocar y de leer. La rueda de hoy es UN número, así que se muestra como un
- * número: la forma de serie recién sirve cuando hay algo que comparar, y eso
- * empieza en la semana.
+ * Una barra por día, sobre todo el histórico, llenaba el celular de tiras de
+ * pocos píxeles imposibles de tocar y de leer. La rueda de hoy es UN número,
+ * así que se muestra como un número.
+ *
+ * La serie recién sirve cuando hay algo que comparar, y son cinco ranuras
+ * fijas: la semana en curso, de lunes a viernes.
  */
 export function PortfolioChart({ snapshots }: { snapshots: Snapshot[] }) {
   const [mode, setMode] = useState<Mode>('weekly')
@@ -70,7 +74,25 @@ export function PortfolioChart({ snapshots }: { snapshots: Snapshot[] }) {
     [snapshots],
   )
 
-  const weekly = useMemo(() => groupBy(sessions, weekKey), [sessions])
+  /**
+   * Lunes a viernes de la semana EN CURSO.
+   *
+   * Antes esto era una barra por semana, y con dos semanas de historia el
+   * gráfico eran dos manchas sin nada que mirar. La semana que importa es la
+   * que estás viviendo: el marco es fijo de lunes a viernes, y los días sin
+   * rueda —feriados— o todavía por venir quedan vacíos en vez de dibujar un
+   * cero, que afirmaría que no se movió nada.
+   */
+  const currentWeek = useMemo<Slot[]>(() => {
+    const byDate = new Map(sessions.map((s) => [s.key, s.value]))
+    const monday = weekKey(todayInBA())
+    return Array.from({ length: 5 }, (_, i) => {
+      const d = new Date(`${monday}T12:00:00Z`)
+      d.setUTCDate(d.getUTCDate() + i)
+      const key = d.toISOString().slice(0, 10)
+      return { key, value: byDate.get(key) ?? null }
+    })
+  }, [sessions])
   const monthly = useMemo(() => groupBy(sessions, (k) => k.slice(0, 7)), [sessions])
 
   if (!sessions.length) {
@@ -85,7 +107,7 @@ export function PortfolioChart({ snapshots }: { snapshots: Snapshot[] }) {
   return (
     <div>
       <div className="mb-3 flex items-start justify-between gap-3">
-        <Heading mode={mode} sessions={sessions} weekly={weekly} monthly={monthly} />
+        <Heading mode={mode} sessions={sessions} week={currentWeek} monthly={monthly} />
 
         {/* El filtro va en una fila sobre el gráfico, no adentro */}
         <div className="border-line flex shrink-0 rounded-lg border p-0.5">
@@ -107,7 +129,7 @@ export function PortfolioChart({ snapshots }: { snapshots: Snapshot[] }) {
       {mode === 'today' ? (
         <TodayPanel last={sessions[sessions.length - 1]} />
       ) : (
-        <Chart data={mode === 'weekly' ? weekly : monthly} mode={mode} />
+        <Chart data={mode === 'weekly' ? currentWeek : monthly} mode={mode} />
       )}
     </div>
   )
@@ -116,12 +138,12 @@ export function PortfolioChart({ snapshots }: { snapshots: Snapshot[] }) {
 function Heading({
   mode,
   sessions,
-  weekly,
+  week,
   monthly,
 }: {
   mode: Mode
   sessions: Point[]
-  weekly: Point[]
+  week: Slot[]
   monthly: Point[]
 }) {
   if (mode === 'today') {
@@ -135,9 +157,12 @@ function Heading({
     )
   }
 
-  const data = mode === 'weekly' ? weekly : monthly
-  const total = data.reduce((sum, d) => sum + d.value, 0)
-  const wins = data.filter((d) => d.value > 0).length
+  // Los huecos no cuentan: una semana con tres ruedas es "1 de 3", no "1 de 5"
+  const values = (mode === 'weekly' ? week : monthly)
+    .map((d) => d.value)
+    .filter((v): v is number => v !== null)
+  const total = values.reduce((sum, v) => sum + v, 0)
+  const wins = values.filter((v) => v > 0).length
   const tone = toneOf(total)
 
   return (
@@ -147,7 +172,9 @@ function Heading({
         {formatCompactARS(Math.abs(total))}
       </p>
       <p className="text-muted text-[11px]">
-        {wins} de {data.length} {mode === 'weekly' ? 'semanas' : 'meses'} en positivo
+        {mode === 'weekly'
+          ? `${wins} de ${values.length} ${values.length === 1 ? 'rueda' : 'ruedas'} esta semana`
+          : `${wins} de ${values.length} ${values.length === 1 ? 'mes' : 'meses'} en positivo`}
       </p>
     </div>
   )
@@ -175,10 +202,10 @@ function TodayPanel({ last }: { last: Point }) {
   )
 }
 
-function Chart({ data, mode }: { data: Point[]; mode: Mode }) {
+function Chart({ data, mode }: { data: Slot[]; mode: Mode }) {
   // Simétrico alrededor del cero: si no, el lado más chico se ve exagerado y
   // una pérdida menor parece del tamaño de una ganancia grande.
-  const peak = Math.max(...data.map((d) => Math.abs(d.value)), 1)
+  const peak = Math.max(...data.map((d) => Math.abs(d.value ?? 0)), 1)
 
   return (
     <div className="h-[150px]">
@@ -219,7 +246,7 @@ function Chart({ data, mode }: { data: Point[]; mode: Mode }) {
 
           <Bar dataKey="value" maxBarSize={34} isAnimationActive={false} shape={<DivergingBar />}>
             {data.map((d) => (
-              <Cell key={d.key} fill={d.value >= 0 ? 'var(--color-gain)' : 'var(--color-loss)'} />
+              <Cell key={d.key} fill={(d.value ?? 0) >= 0 ? 'var(--color-gain)' : 'var(--color-loss)'} />
             ))}
           </Bar>
         </BarChart>
@@ -259,11 +286,17 @@ function groupBy(points: Point[], keyOf: (iso: string) => string): Point[] {
   return [...acc.entries()].map(([key, value]) => ({ key, value }))
 }
 
+/** Hoy en Buenos Aires: el mercado local define de qué semana estamos hablando. */
+function todayInBA(): string {
+  return new Date().toLocaleDateString('en-CA', { timeZone: 'America/Argentina/Buenos_Aires' })
+}
+
 function shortLabel(key: string, mode: Mode): string {
+  // Con cinco ranuras fijas el día de la semana se lee mejor que la fecha, y
+  // además deja claro que el marco es lunes a viernes
   return mode === 'weekly'
     ? new Date(`${key}T12:00:00Z`).toLocaleDateString('es-AR', {
-        day: '2-digit',
-        month: '2-digit',
+        weekday: 'short',
         timeZone: 'UTC',
       })
     : new Date(`${key}-01T12:00:00Z`).toLocaleDateString('es-AR', {
@@ -280,12 +313,7 @@ function longLabel(key: string, mode: Mode): string {
       timeZone: 'UTC',
     })
   }
-  const start = new Date(`${key}T12:00:00Z`)
-  const end = new Date(start)
-  end.setUTCDate(end.getUTCDate() + 4) // lunes a viernes
-  const fmt = (d: Date) =>
-    d.toLocaleDateString('es-AR', { day: '2-digit', month: '2-digit', timeZone: 'UTC' })
-  return `Semana del ${fmt(start)} al ${fmt(end)}`
+  return longDate(key)
 }
 
 function longDate(iso: string): string {
@@ -308,6 +336,15 @@ function sign(value: number): string {
  * cambia de lado según el signo: arriba en las ganancias, abajo en las
  * pérdidas. Con un radius fijo, las barras negativas quedarían redondeadas
  * contra la línea del cero, que es justo el borde que tiene que leerse recto.
+ *
+ * ── Ojo con el signo de `height` ─────────────────────────────────────────
+ *
+ * Para las barras bajo cero Recharts manda `height` NEGATIVO, con `y` en la
+ * línea del cero. La versión anterior lo usaba tal cual, así que el radio
+ * salía negativo y las curvas de las esquinas se abrían hacia afuera: las
+ * barras rojas se ensanchaban en la base como un embudo, mientras las verdes
+ * se veían bien. Por eso acá se normaliza todo a valores positivos antes de
+ * dibujar, en vez de confiar en la convención de signos.
  */
 function DivergingBar(props: {
   x?: number
@@ -318,15 +355,22 @@ function DivergingBar(props: {
   value?: number
 }) {
   const { x = 0, y = 0, width = 0, height = 0, fill, value = 0 } = props
-  if (!width || !height) return null
 
-  const r = Math.min(4, width / 2, height)
+  const w = Math.abs(width)
+  const h = Math.abs(height)
+  if (!w || !h) return null
+
+  // Esquina superior izquierda real, venga el alto en el signo que venga
+  const left = width < 0 ? x + width : x
+  const top = height < 0 ? y + height : y
+
+  const r = Math.max(0, Math.min(4, w / 2, h))
   const up = value >= 0
 
   // Un path en vez de <rect>: rect no sabe redondear dos esquinas de un lado
   const path = up
-    ? `M${x},${y + height} L${x},${y + r} Q${x},${y} ${x + r},${y} L${x + width - r},${y} Q${x + width},${y} ${x + width},${y + r} L${x + width},${y + height} Z`
-    : `M${x},${y} L${x},${y + height - r} Q${x},${y + height} ${x + r},${y + height} L${x + width - r},${y + height} Q${x + width},${y + height} ${x + width},${y + height - r} L${x + width},${y} Z`
+    ? `M${left},${top + h} L${left},${top + r} Q${left},${top} ${left + r},${top} L${left + w - r},${top} Q${left + w},${top} ${left + w},${top + r} L${left + w},${top + h} Z`
+    : `M${left},${top} L${left},${top + h - r} Q${left},${top + h} ${left + r},${top + h} L${left + w - r},${top + h} Q${left + w},${top + h} ${left + w},${top + h - r} L${left + w},${top} Z`
 
   return <path d={path} fill={fill} />
 }

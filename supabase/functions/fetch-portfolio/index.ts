@@ -37,6 +37,9 @@ const db = createClient(
   { auth: { persistSession: false } },
 )
 
+/** Debajo de esto una posición es residuo de un rescate, no una tenencia. */
+const DUST_ARS = 1
+
 /** Fecha de hoy en Buenos Aires (el mercado local define el día del snapshot) */
 function todayBA(): string {
   return new Date().toLocaleDateString('en-CA', { timeZone: 'America/Argentina/Buenos_Aires' })
@@ -159,7 +162,12 @@ async function syncUser(userId: string) {
   const token = await getAccessToken(db, userId)
   const [portfolio, estado] = await Promise.all([iol.portfolio(token), iol.estadoCuenta(token)])
 
-  const activos: IolActivo[] = portfolio.activos ?? []
+  // Un rescate total de FCI deja polvo: IOL siguió devolviendo PCOMAGB con
+  // 0,0001 cuotapartes y $0,04 valorizados, así que la posición nunca entraba
+  // en la lista de cerradas y quedaba en el dashboard con "$ 0 · 0.0%".
+  // Debajo de un peso no es una tenencia, es el resto de la división.
+  const todos: IolActivo[] = portfolio.activos ?? []
+  const activos = todos.filter((a) => valueInArs(a) >= DUST_ARS)
   const symbols = activos.map((a) => a.titulo.simbolo)
 
   // Sectores/plazos configurables desde asset_metadata
