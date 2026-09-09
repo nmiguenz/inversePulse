@@ -42,7 +42,44 @@ const BATCH = 100
  */
 const MAX_LAG_DAYS = 7
 
+/**
+ * El benchmark: el CEDEAR del S&P 500, que cotiza en pesos igual que el resto
+ * de la cartera. Está siempre en `asset_metadata` como sugerible, así que
+ * `fetch-market-quotes` le escribe un cierre por rueda en `price_history`.
+ */
+const BENCHMARK = 'SPY'
+
 type Action = 'buy' | 'add' | 'trim' | 'sell' | 'rebalance' | 'hold'
+
+/**
+ * El alpha solo tiene sentido donde se TOMÓ exposición.
+ *
+ * En un `sell` acertado el activo cae, así que `changePct - spyReturn` daría un
+ * número muy negativo justo cuando la decisión fue buena: vender a tiempo algo
+ * que después se derrumbó pasaría a leerse como "le perdiste al mercado". Y
+ * como el promedio de alpha alimenta una instrucción del prompt ("tu alpha es
+ * negativo, esto debe mejorar"), un sell bien hecho terminaría empujando al
+ * modelo a desconfiar de sí mismo.
+ *
+ * `hold` y `rebalance` quedan afuera por lo mismo que ya los deja afuera
+ * `verdict()`: no hay un activo contra el cual comparar.
+ */
+function takesExposure(action: Action): boolean {
+  return action === 'buy' || action === 'add'
+}
+
+/** Último cierre conocido de un símbolo. */
+async function lastClose(symbol: string): Promise<number | null> {
+  const { data } = await db
+    .from('price_history')
+    .select('close_price')
+    .eq('symbol', symbol)
+    .order('recorded_at', { ascending: false })
+    .limit(1)
+    .maybeSingle()
+
+  return data ? Number(data.close_price) : null
+}
 
 /** Comprar y que suba es acertar; vender y que suba es errar. */
 function verdict(action: Action, changePct: number): string {
@@ -59,7 +96,7 @@ function verdict(action: Action, changePct: number): string {
 /**
  * Evalúa un horizonte y devuelve lo que marcó.
  *
- * Las cuatro columnas van por parámetro porque el horizonte de 30 días usa los
+ * Las columnas van por parámetro porque el horizonte de 30 días usa los
  * nombres viejos (`outcome_verdict`, `evaluated_at`), sin sufijo: son los que
  * leen el frontend y el track record del asesor, y renombrarlos para que la
  * función quedara más prolija habría roto las dos cosas.
@@ -75,6 +112,8 @@ async function evaluateAtHorizon(
   pctCol: string,
   verdictCol: string,
   evaluatedCol: string,
+  spyReturnCol: string,
+  alphaCol: string,
   opts: { deactivate?: boolean; maxLagDays?: number } = {},
 ): Promise<Array<Record<string, unknown>>> {
   const now = Date.now()
@@ -82,7 +121,7 @@ async function evaluateAtHorizon(
 
   let query = db
     .from('recommendations')
-    .select('id, action, symbol, price_at_recommendation, created_at')
+    .select('id, action, symbol, price_at_recommendation, spy_price_at_rec, created_at')
     .is(evaluatedCol, null)
     .lte('created_at', cutoff)
     .limit(BATCH)
@@ -98,6 +137,13 @@ async function evaluateAtHorizon(
     return []
   }
   if (!pending?.length) return []
+
+  // Una sola lectura para todo el lote: el precio de hoy del benchmark es el
+  // mismo para las 100 recomendaciones que se estén evaluando.
+  const spyNow = await lastClose(BENCHMARK)
+  if (spyNow === null) {
+    console.warn(`[evaluate] ${horizonDays}d: sin cierre de ${BENCHMARK}, se evalúa sin alpha`)
+  }
 
   const results: Array<Record<string, unknown>> = []
 
@@ -127,6 +173,19 @@ async function evaluateAtHorizon(
     const changePct = ((after - before) / before) * 100
     const outcome = verdict(rec.action as Action, changePct)
 
+    // Sin precio de SPY guardado no hay contra qué comparar: es una
+    // recomendación anterior a la 0038 y se queda sin alpha. Inventarle un
+    // precio retroactivo sería fabricar el número que la métrica existe para
+    // medir.
+    const spyBefore = Number(rec.spy_price_at_rec)
+    const spyReturn =
+      spyNow !== null && Number.isFinite(spyBefore) && spyBefore > 0
+        ? ((spyNow - spyBefore) / spyBefore) * 100
+        : null
+
+    const alpha =
+      spyReturn !== null && takesExposure(rec.action as Action) ? changePct - spyReturn : null
+
     await db
       .from('recommendations')
       .update({
@@ -134,6 +193,10 @@ async function evaluateAtHorizon(
         [pctCol]: changePct,
         [verdictCol]: outcome,
         [evaluatedCol]: new Date().toISOString(),
+        // El retorno del índice se guarda siempre que se pueda calcular; el
+        // alpha, solo donde hubo exposición.
+        ...(spyReturn !== null ? { [spyReturnCol]: spyReturn } : {}),
+        ...(alpha !== null ? { [alphaCol]: alpha } : {}),
         // Solo el horizonte largo cierra la recomendación: a los 7 y a los 14
         // días la sugerencia sigue vigente y se sigue mostrando en la app.
         ...(opts.deactivate ? { is_active: false } : {}),
@@ -146,6 +209,7 @@ async function evaluateAtHorizon(
       action: rec.action,
       changePct: changePct.toFixed(1),
       outcome,
+      ...(alpha !== null ? { alpha: alpha.toFixed(1) } : {}),
     })
   }
 
@@ -164,6 +228,8 @@ Deno.serve(async (req) => {
     'outcome_7d_pct',
     'outcome_7d_verdict',
     'evaluated_7d_at',
+    'spy_return_7d',
+    'alpha_7d',
     { maxLagDays: MAX_LAG_DAYS },
   )
   const mid = await evaluateAtHorizon(
@@ -172,6 +238,8 @@ Deno.serve(async (req) => {
     'outcome_14d_pct',
     'outcome_14d_verdict',
     'evaluated_14d_at',
+    'spy_return_14d',
+    'alpha_14d',
     { maxLagDays: MAX_LAG_DAYS },
   )
   const long = await evaluateAtHorizon(
@@ -180,6 +248,8 @@ Deno.serve(async (req) => {
     'outcome_pct',
     'outcome_verdict',
     'evaluated_at',
+    'spy_return_30d',
+    'alpha_30d',
     { deactivate: true },
   )
 

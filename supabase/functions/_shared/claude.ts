@@ -224,6 +224,13 @@ export type AdvisorContext = {
      */
     accuracy7d?: string | null;
     judged7d?: number;
+    /**
+     * Alpha promedio contra el CEDEAR de SPY, en puntos porcentuales. Solo
+     * promedia las recomendaciones que tomaron exposición (buy y add) y que se
+     * crearon después de la 0038: el resto no tiene con qué compararse.
+     */
+    alphaAvg30d?: string | null;
+    alphaAvg7d?: string | null;
   };
 };
 
@@ -511,6 +518,27 @@ function buildTrackRecordSection(
     'Si tu accuracy es menor a 50%, bajá el nivel de confianza de tus recomendaciones. "high"',
     "debería ser excepcional, no el default.",
   );
+
+  // El alpha va al final porque es la vara más exigente: acertar la dirección
+  // no alcanza si el índice hizo lo mismo sin trabajo ni riesgo de selección.
+  if (tr.alphaAvg30d != null) {
+    const alpha30 = Number(tr.alphaAvg30d);
+    lines.push(
+      `Alpha promedio vs SPY a 30d: ${tr.alphaAvg30d}% (positivo = le ganaste al mercado, ` +
+        "negativo = habrías ganado más comprando SPY y no haciendo nada). Se mide solo sobre " +
+        "las compras: un sell no toma exposición contra la que comparar.",
+    );
+    if (tr.alphaAvg7d != null) {
+      lines.push(`Alpha promedio vs SPY a 7d: ${tr.alphaAvg7d}%.`);
+    }
+    if (alpha30 < 0) {
+      lines.push(
+        "Tu alpha es NEGATIVO: tus recomendaciones pierden contra comprar y mantener SPY. " +
+          "Esto debe mejorar. Priorizá convicciones reales sobre llenar la cuota de " +
+          "recomendaciones.",
+      );
+    }
+  }
 
   return lines.join("\n");
 }

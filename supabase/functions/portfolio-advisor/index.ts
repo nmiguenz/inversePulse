@@ -278,6 +278,9 @@ function enforcePositionLimits(
   })
 }
 
+/** El benchmark contra el que se mide el alpha. Ver la 0038. */
+const BENCHMARK = 'SPY'
+
 /** Cuántas recomendaciones ya evaluadas se miran para armar el historial. */
 const TRACK_RECORD_SIZE = 20
 /** Cuántos errores se le muestran al modelo. Es un resumen, no un expediente. */
@@ -293,6 +296,8 @@ type PastResult = {
   outcome_verdict: string | null
   outcome_pct: number | null
   outcome_7d_verdict: string | null
+  alpha_30d: number | null
+  alpha_7d: number | null
 }
 
 type TrackRecord = {
@@ -306,6 +311,9 @@ type TrackRecord = {
   /** Acierto a 7 días de las recomendaciones short-term, y sobre cuántas. */
   accuracy7d: string | null
   judged7d: number
+  /** Alpha promedio vs SPY. Null hasta que haya alguna evaluación con alpha. */
+  alphaAvg30d: string | null
+  alphaAvg7d: string | null
 }
 
 /**
@@ -369,6 +377,17 @@ function buildTrackRecord(rows: PastResult[]): TrackRecord | undefined {
   const judged7d = correctas7d + short.filter((r) => r.outcome_7d_verdict === 'incorrecta').length
   const accuracy7d = judged7d > 0 ? ((correctas7d / judged7d) * 100).toFixed(0) : null
 
+  // Alpha promedio contra SPY. Solo promedia las que TIENEN alpha: las
+  // anteriores a la 0038 y las que no tomaron exposición (sell, trim, hold,
+  // rebalance) vienen en null y no entran ni como cero — un cero diría "empató
+  // con el mercado", que es una afirmación distinta de "no se midió".
+  const avgAlpha = (values: Array<number | null>): string | null => {
+    const usable = values.filter((v): v is number => v !== null && Number.isFinite(Number(v)))
+    if (!usable.length) return null
+    const mean = usable.reduce((s, v) => s + Number(v), 0) / usable.length
+    return mean.toFixed(1)
+  }
+
   return {
     total,
     correctas,
@@ -379,6 +398,8 @@ function buildTrackRecord(rows: PastResult[]): TrackRecord | undefined {
     repeatedErrors,
     accuracy7d,
     judged7d,
+    alphaAvg30d: avgAlpha(rows.map((r) => r.alpha_30d)),
+    alphaAvg7d: avgAlpha(rows.map((r) => r.alpha_7d)),
   }
 }
 
@@ -585,7 +606,10 @@ Deno.serve(async (req) => {
       // una COMPRA, y lo que se compra sale del universo, no de lo que ya tenés.
       db
         .from('market_quotes')
-        .select('symbol, implied_fx')
+        // `price` es para el benchmark: SPY entra en esta misma consulta
+        // porque es sugerible, así que su cotización sale sin pedir una query
+        // aparte.
+        .select('symbol, implied_fx, price')
         .in('symbol', [...new Set([...heldSymbols, ...universe.map((u) => u.symbol)])]),
       db
         .from('dollar_rates')
@@ -717,7 +741,7 @@ Deno.serve(async (req) => {
     const { data: pastResults } = await db
       .from('recommendations')
       .select(
-        'action, symbol, confidence, time_horizon, outcome_verdict, outcome_pct, outcome_7d_verdict, created_at',
+        'action, symbol, confidence, time_horizon, outcome_verdict, outcome_pct, outcome_7d_verdict, alpha_30d, alpha_7d, created_at',
       )
       .eq('user_id', user.id)
       .is('goal_id', null)
@@ -733,6 +757,9 @@ Deno.serve(async (req) => {
           `${trackRecord.worstMisses.length} errores peores` +
           (trackRecord.accuracy7d !== null
             ? `, ${trackRecord.accuracy7d}% a 7d sobre ${trackRecord.judged7d} short-term`
+            : '') +
+          (trackRecord.alphaAvg30d !== null
+            ? `, alpha 30d ${trackRecord.alphaAvg30d}% vs ${BENCHMARK}`
             : ''),
       )
     }
@@ -824,6 +851,24 @@ Deno.serve(async (req) => {
       universe.map((u) => ({ symbol: u.symbol, sector: u.sector })),
     )
 
+    // ---------- Precio del benchmark al momento de recomendar ----------
+    // Se guarda con la recomendación porque después no se puede reconstruir:
+    // `evaluate-recommendations` sabría el cierre del día, pero no a qué hora
+    // de la rueda se sugirió. Sin este número no hay alpha.
+    //
+    // Tres fuentes, de la más fresca a la más vieja: el precio en vivo si SPY
+    // está en cartera (lo actualiza `fetch-portfolio` cada 5 minutos), la
+    // cotización diaria de `market_quotes`, y el último cierre de la serie.
+    const spyPriceAtRec =
+      priceBySymbol.get(BENCHMARK) ??
+      (quotes ?? []).find((q) => q.symbol === BENCHMARK)?.price ??
+      seriesBySymbol.get(BENCHMARK)?.at(-1) ??
+      null
+
+    if (spyPriceAtRec === null) {
+      console.warn(`[advisor] sin precio de ${BENCHMARK}: las recomendaciones de hoy quedan sin alpha`)
+    }
+
     // El monto sugerido no puede superar el efectivo real, diga lo que diga el
     // modelo: es la única validación que protege plata de verdad.
     const clean = sized.map((r: Recommendation) => {
@@ -880,6 +925,7 @@ Deno.serve(async (req) => {
           suggested_quantity: r.amount && r.price ? Math.floor(r.amount / r.price) : null,
           realizes_loss: r.realizes_loss,
           price_at_recommendation: r.price,
+          spy_price_at_rec: spyPriceAtRec,
           analyzed_with: OPPORTUNITY_MODEL,
           is_active: true,
           expires_at: new Date(Date.now() + 7 * 864e5).toISOString(),
