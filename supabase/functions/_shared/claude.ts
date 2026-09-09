@@ -17,6 +17,24 @@
  * solo con JSON" ni limpiar backticks del texto.
  */
 import Anthropic from "npm:@anthropic-ai/sdk@0.115.0";
+import {
+  macdSignal,
+  priceVsSma,
+  type RelativeStrength,
+  rsiZone,
+  SMA_LONG,
+  SMA_SHORT,
+  type Technicals,
+} from "./indicators.ts";
+// Los tres límites de sizing salen de profile.ts, que es de donde los lee el
+// cap. `profile.ts` importa de acá solo TIPOS (`import type`, que se borra al
+// compilar), así que en runtime no hay ciclo: claude.ts → profile.ts y nada
+// de vuelta.
+import {
+  MAX_EXISTING_POSITION_PCT,
+  MAX_NEW_POSITION_PCT,
+  MAX_SECTOR_AFTER_BUY_PCT,
+} from "./profile.ts";
 
 /** Sonnet para clasificar (alto volumen, tarea simple). */
 export const NEWS_MODEL = "claude-sonnet-5";
@@ -156,6 +174,57 @@ export type AdvisorContext = {
     string,
     { implicit: number; mep: number; premiumPct: number }
   >;
+  /**
+   * Indicadores técnicos calculados desde `price_history`.
+   *
+   * Cubre lo que tenés Y el universo sugerible: el RSI en sobrecompra frena
+   * sobre todo una COMPRA, y lo que se compra sale del universo. Un símbolo
+   * sin serie suficiente queda afuera del mapa y su línea sale sin
+   * indicadores, que es preferible a mostrar un número calculado con 4 barras.
+   */
+  indicators?: Record<string, Technicals>;
+  /**
+   * Fuerza relativa: retornos de 7, 30 y 90 días y puesto en el ranking.
+   *
+   * Se rankea la cartera JUNTO con el universo, no cada lista por su lado: un
+   * "#3" solo significa algo si el conjunto es el mismo, y la regla de mirar
+   * lo que quedó en el fondo del ranking apunta tanto a lo que se podría
+   * comprar como a lo que ya se tiene.
+   */
+  relativeStrength?: Record<string, RelativeStrength>;
+  /**
+   * Cuántos activos sugeribles hay en total, cuando `universe` es un recorte.
+   *
+   * Sin esto el modelo lee la lista recortada como si fuera el universo
+   * entero, y ahí "el top 25% del ranking" pasa a significar cualquier cosa:
+   * todo lo que ve ya viene del top. Que sepa que está mirando una selección
+   * es lo que mantiene el ranking interpretable.
+   */
+  universeTotal?: number;
+  /**
+   * Cómo le fue a las recomendaciones anteriores, ya evaluadas a 30 días.
+   *
+   * Es un resumen, no el detalle: conteos, el porcentaje de acierto y un
+   * puñado de errores. `accuracy` viene como string ya redondeado porque el
+   * prompt lo imprime tal cual, y es null cuando ninguna recomendación pudo
+   * juzgarse por precio (todas neutrales).
+   */
+  trackRecord?: {
+    total: number;
+    correctas: number;
+    incorrectas: number;
+    neutrales: number;
+    accuracy: string | null;
+    worstMisses: string[];
+    repeatedErrors: string[];
+    /**
+     * Acierto a 7 días de las recomendaciones `short`, y sobre cuántas se
+     * calculó. Opcionales: hasta que la 0037 acumule mediciones a 7 días,
+     * `accuracy7d` viene en null y la línea no se escribe.
+     */
+    accuracy7d?: string | null;
+    judged7d?: number;
+  };
 };
 
 export type PortfolioContext = {
@@ -182,6 +251,10 @@ export type PortfolioContext = {
   }>;
   /** Perfil del inversor */
   profile?: InvestorProfile;
+  /** Indicadores técnicos por símbolo — mismo formato que en `AdvisorContext`. */
+  indicators?: Record<string, Technicals>;
+  /** Fuerza relativa por símbolo — mismo formato que en `AdvisorContext`. */
+  relativeStrength?: Record<string, RelativeStrength>;
 };
 
 export type GoalContext = {
@@ -225,12 +298,222 @@ export class MissingApiKeyError extends Error {
   }
 }
 
-const fmtArs = (n: number) =>
+/** Pesos sin centavos. Lo usa el prompt y también los avisos del asesor. */
+export const fmtArs = (n: number) =>
   new Intl.NumberFormat("es-AR", {
     style: "currency",
     currency: "ARS",
     maximumFractionDigits: 0,
   }).format(n);
+
+/**
+ * Los indicadores técnicos como sufijo de la línea de un símbolo.
+ *
+ * En palabras y no en números crudos: "RSI 62 (neutral)" se lee solo, un
+ * histograma de MACD de -1,19 no le dice nada al modelo sin la escala del
+ * activo. Cada tramo se omite si el dato no está — una serie de 30 barras
+ * tiene RSI y SMA20 pero no SMA50 ni MACD, y media línea es mejor que una
+ * línea con huecos.
+ */
+function technicalsSuffix(t: Technicals | undefined): string {
+  if (!t) return "";
+
+  const parts: string[] = [];
+  if (t.rsi14 !== null) {
+    parts.push(`RSI ${t.rsi14.toFixed(0)} (${rsiZone(t.rsi14)})`);
+  }
+  if (t.sma50 !== null) {
+    parts.push(`precio ${priceVsSma(t.price, t.sma50, SMA_LONG)}`);
+  }
+  if (t.sma20 !== null) {
+    parts.push(priceVsSma(t.price, t.sma20, SMA_SHORT));
+  }
+  if (t.macd) {
+    parts.push(`MACD ${macdSignal(t.macd, t.price)}`);
+  }
+  return parts.length ? ` · ${parts.join(" · ")}` : "";
+}
+
+/**
+ * Los tres retornos y el puesto en el ranking, para la línea de un activo del
+ * universo. Un plazo sin datos sale como "s/d" en vez de desaparecer: que
+ * falte es información — significa que el activo no tiene historia suficiente
+ * y que por eso quedó al fondo del ranking.
+ */
+function strengthSuffix(rs: RelativeStrength | undefined): string {
+  if (!rs) return "";
+
+  const pct = (v: number | null) =>
+    v === null ? "s/d" : `${v > 0 ? "+" : ""}${v.toFixed(1)}%`;
+  return (
+    ` · 7d: ${pct(rs.ret7d)} · 30d: ${pct(rs.ret30d)} · 90d: ${pct(rs.ret90d)}` +
+    ` · rank #${rs.rank}/${rs.total}`
+  );
+}
+
+/**
+ * En la cartera va solo el puesto, sin los tres retornos: la línea de una
+ * posición ya trae la tendencia de 30 días y el P/L, así que repetir los
+ * plazos sería decir lo mismo dos veces. El rank es el dato nuevo, y es el que
+ * necesita la regla de revisar la tesis de lo que quedó en el fondo.
+ */
+function rankSuffix(rs: RelativeStrength | undefined): string {
+  return rs ? ` · rank #${rs.rank}/${rs.total}` : "";
+}
+
+/**
+ * El universo, del de mejor momentum al peor.
+ *
+ * Lo primero que lee el modelo es lo que más pesa en lo que propone, así que
+ * el orden de la lista es en sí una recomendación. Un símbolo sin ranking
+ * queda al final en vez de romper el orden.
+ */
+function byRelativeStrength<T extends { symbol: string }>(
+  assets: T[],
+  rs?: Record<string, RelativeStrength>,
+): T[] {
+  if (!rs) return assets;
+  const rankOf = (symbol: string) => rs[symbol]?.rank ?? Number.MAX_SAFE_INTEGER;
+  return [...assets].sort((a, b) => rankOf(a.symbol) - rankOf(b.symbol));
+}
+
+/**
+ * Cómo leer los indicadores técnicos.
+ *
+ * El mismo texto para el asesor y para la búsqueda de oportunidades: los dos
+ * ven las mismas líneas, y si cada prompt explicara el RSI a su manera el
+ * usuario recibiría dos criterios de timing distintos sobre la misma cartera.
+ *
+ * Se incluye SOLO cuando hay indicadores en el contexto: explicar cómo leer un
+ * dato que no está es invitar a que el modelo lo invente.
+ */
+const INDICATOR_GUIDE = [
+  "INDICADORES TÉCNICOS (en la línea de cada posición y activo sugerible):",
+  "",
+  "RSI-14: por encima de 70 es sobrecompra (NO comprar más), debajo de 30 es",
+  "sobrevendido (posible oportunidad). Entre 30-70 es neutral.",
+  "SMA-50: si el precio está por debajo, la tendencia de mediano plazo es bajista.",
+  "No comprar activos debajo de su SMA50 salvo que la tesis sea de recuperación",
+  "con catalizador concreto.",
+  'MACD: "alcista" confirma momentum positivo, "bajista" lo contradice. Si RSI dice',
+  "sobrecompra Y MACD dice bajista, es una señal fuerte de NO comprar.",
+  "NUNCA recomiendes comprar un activo con RSI > 70. Es la regla más importante",
+  "de timing.",
+].join("\n");
+
+/**
+ * Los límites de concentración que el código aplica pase lo que pase.
+ *
+ * No es una regla más del prompt: es la descripción de un cap que corre
+ * DESPUÉS de que el modelo contesta, en `portfolio-advisor`. Está acá para que
+ * no gaste tokens —ni convicción— proponiendo montos que el sistema le va a
+ * recortar, y para que el usuario no lea una compra de $1M que después
+ * aparece capada a $76.000 sin explicación.
+ *
+ * Los números salen de `profile.ts`, que es donde el cap los lee: escribirlos
+ * a mano acá los dejaría desincronizados en cuanto alguien mueva uno.
+ */
+const SIZING_LIMITS = [
+  "LÍMITES DUROS DE CONCENTRACIÓN (el sistema los aplica aunque vos no los respetes):",
+  "",
+  `Posición nueva: máximo ${MAX_NEW_POSITION_PCT}% de la cartera.`,
+  `Posición existente: máximo ${MAX_EXISTING_POSITION_PCT}% de la cartera después de agregar.`,
+  `Sector: máximo ${MAX_SECTOR_AFTER_BUY_PCT}% de la cartera después de la compra.`,
+  "Si sugerís comprar algo que violaría estos límites, el sistema lo bloquea. Mejor",
+  "sugerí un monto que entre dentro de los límites.",
+].join("\n");
+
+/**
+ * Cómo leer el ranking de fuerza relativa.
+ *
+ * Igual que la guía de indicadores: un solo texto para los dos prompts, y solo
+ * cuando el ranking existe. Va junto a ella porque las dos explican lo mismo —
+ * cómo leer una línea— y separarlas obligaba al modelo a saltar de una punta a
+ * la otra del prompt para interpretar un solo renglón.
+ */
+const STRENGTH_GUIDE = [
+  "RANKING DE FUERZA RELATIVA (los activos del universo están ordenados por score):",
+  "",
+  "El score combina retorno de 7, 30 y 90 días. Rank #1 = mejor momentum.",
+  "Priorizá oportunidades en activos del top 25% del ranking.",
+  "Un activo en el bottom 25% necesita un catalizador CONCRETO para recomendarlo",
+  '— "está barato" no alcanza, tiene que haber algo que cambie la tendencia.',
+  "Si un activo de la cartera está en el bottom 25%, evaluá si la tesis sigue",
+  "vigente o si es candidato a trim/sell.",
+].join("\n");
+
+/**
+ * El historial de aciertos, tal como lo lee el modelo.
+ *
+ * Se arma acá y no como constante porque son datos, no instrucciones: cada
+ * corrida tiene otros números. Lo que sí es fijo es la lectura — un accuracy
+ * bajo tiene que bajar la confianza declarada, que es todo el punto de
+ * mostrarle esto.
+ *
+ * La base del porcentaje se dice en voz alta. Las neutrales incluyen todos los
+ * `hold` y `rebalance`, que `evaluate-recommendations` no juzga por precio: sin
+ * aclararlo, el modelo lee "8 de 15" y concluye que falló 7 veces.
+ */
+function buildTrackRecordSection(
+  tr: NonNullable<AdvisorContext["trackRecord"]>,
+): string {
+  const judged = tr.correctas + tr.incorrectas;
+
+  // Se arma con push y no con un array + filter(Boolean): el filtro también se
+  // llevaba puesta la línea en blanco del encabezado, y la sección terminaba
+  // pegada a la anterior en el prompt.
+  const lines = [
+    "TU HISTORIAL DE RECOMENDACIONES (para calibrar confianza):",
+    "",
+    `Evaluadas: ${tr.total}. Correctas: ${tr.correctas}. Incorrectas: ${tr.incorrectas}. ` +
+      `Neutrales: ${tr.neutrales}.`,
+  ];
+
+  if (tr.accuracy7d != null) {
+    lines.push(
+      `Accuracy a 7 días: ${tr.accuracy7d}% (sobre ${tr.judged7d} recomendaciones short-term).`,
+    );
+  }
+
+  lines.push(
+    tr.accuracy !== null
+      ? `Accuracy a 30 días: ${tr.accuracy}% (sobre todas: las ${judged} que el precio pudo ` +
+        `juzgar). Las neutrales (${tr.neutrales}) —los hold, los rebalance y los movimientos ` +
+        "menores al 3%— no cuentan ni a favor ni en contra: no recomendar sigue siendo una " +
+        "respuesta válida."
+      : "Accuracy a 30 días: sin datos. Ninguna pudo juzgarse por precio todavía: todas " +
+        "fueron hold, rebalance o movimientos menores al 3%.",
+  );
+
+  // La comparación entre los dos plazos es el motivo de tener el de 7 días:
+  // sin decirle qué hacer con la diferencia, son dos números sueltos.
+  if (tr.accuracy7d != null && tr.accuracy !== null) {
+    lines.push(
+      "Si tu acierto a 7 días es bastante peor que el de 30, tus tesis de corto plazo son " +
+        'las que fallan: bajá la convicción cuando pongas time_horizon "short", o dales ' +
+        "más plazo.",
+    );
+  }
+
+  if (tr.worstMisses.length) {
+    lines.push(`Peores errores recientes: ${tr.worstMisses.join(", ")}.`);
+  }
+
+  if (tr.repeatedErrors.length) {
+    lines.push(
+      `Activos donde fallaste más de una vez: ${tr.repeatedErrors.join(", ")}. Sé EXTRA ` +
+        "cauteloso con estos — necesitás una tesis más fuerte que lo habitual para " +
+        "recomendarlos.",
+    );
+  }
+
+  lines.push(
+    'Si tu accuracy es menor a 50%, bajá el nivel de confianza de tus recomendaciones. "high"',
+    "debería ser excepcional, no el default.",
+  );
+
+  return lines.join("\n");
+}
 
 // ============================================================
 // Análisis de noticias (Sonnet — alto volumen, tarea simple)
@@ -429,7 +712,11 @@ function opportunitySchema(universeSymbols: string[]) {
   };
 }
 
-function buildOpportunitySystemPrompt(profile?: InvestorProfile) {
+function buildOpportunitySystemPrompt(
+  profile?: InvestorProfile,
+  hasIndicators = false,
+  hasStrength = false,
+) {
   const isAggressive = profile?.riskProfile === "aggressive";
 
   return [
@@ -472,6 +759,10 @@ function buildOpportunitySystemPrompt(profile?: InvestorProfile) {
           "- Diversificación sectorial cuando un sector está subponderado",
         ].join("\n"),
     "",
+    hasIndicators ? INDICATOR_GUIDE : "",
+    "",
+    hasStrength ? STRENGTH_GUIDE : "",
+    "",
     "Devolvé como máximo 3 oportunidades, y solo donde tengas convicción real.",
     "",
     "Tené en cuenta la concentración actual de la cartera: sugerir más de un sector",
@@ -497,7 +788,9 @@ export async function analyzeOpportunities(
   const positionLines = ctx.positions
     .map(
       (p) =>
-        `${p.symbol} (${p.sector}): ${fmtArs(p.value)}, ${p.weight.toFixed(1)}% de la cartera, P/L ${p.gainPct.toFixed(1)}%`,
+        `${p.symbol} (${p.sector}): ${fmtArs(p.value)}, ${p.weight.toFixed(1)}% de la cartera, P/L ${p.gainPct.toFixed(1)}%` +
+        technicalsSuffix(ctx.indicators?.[p.symbol]) +
+        rankSuffix(ctx.relativeStrength?.[p.symbol]),
     )
     .join("\n");
 
@@ -509,10 +802,12 @@ export async function analyzeOpportunities(
     .join("\n");
 
   // Incluir precios del universo — sin precio el modelo no puede evaluar "barato" vs "caro"
-  const universeLines = ctx.universe
+  const universeLines = byRelativeStrength(ctx.universe, ctx.relativeStrength)
     .map(
       (u) =>
-        `${u.symbol} — ${u.name} (${u.sector})${u.price ? ` · ${fmtArs(u.price)}` : ""}`,
+        `${u.symbol} — ${u.name} (${u.sector})${u.price ? ` · ${fmtArs(u.price)}` : ""}` +
+        strengthSuffix(ctx.relativeStrength?.[u.symbol]) +
+        technicalsSuffix(ctx.indicators?.[u.symbol]),
     )
     .join("\n");
 
@@ -538,7 +833,11 @@ export async function analyzeOpportunities(
         schema: opportunitySchema(ctx.universe.map((u) => u.symbol)),
       },
     },
-    system: buildOpportunitySystemPrompt(ctx.profile),
+    system: buildOpportunitySystemPrompt(
+      ctx.profile,
+      Object.keys(ctx.indicators ?? {}).length > 0,
+      Object.keys(ctx.relativeStrength ?? {}).length > 0,
+    ),
     messages: [{ role: "user", content: user }],
   });
 
@@ -649,6 +948,8 @@ function buildAdvisorSystemPrompt(ctx: AdvisorContext) {
   const medianVol = hasExpectedMove ? vols[Math.floor(vols.length / 2)] : 0;
   const hasDollarPremium =
     Object.keys(ctx.dollarPremium ?? {}).length > 0;
+  const hasIndicators = Object.keys(ctx.indicators ?? {}).length > 0;
+  const hasStrength = Object.keys(ctx.relativeStrength ?? {}).length > 0;
 
   return [
     // ── Identidad del asesor, adaptada al perfil del usuario ──
@@ -829,6 +1130,10 @@ function buildAdvisorSystemPrompt(ctx: AdvisorContext) {
           "- Si sugerís hold, una volatilidad baja confirma que no se espera movimiento.",
         ].join("\n")
       : "",
+    hasIndicators ? INDICATOR_GUIDE : "",
+    hasStrength ? STRENGTH_GUIDE : "",
+    SIZING_LIMITS,
+    ctx.trackRecord ? buildTrackRecordSection(ctx.trackRecord) : "",
     hasDollarPremium
       ? [
           "TC IMPLÍCITO (tipo de cambio implícito del CEDEAR vs MEP de mercado):",
@@ -882,11 +1187,16 @@ export async function advise(
         ? ` · TC implícito $${dp.implicit.toFixed(0)} (${dp.premiumPct > 0 ? "+" : ""}${dp.premiumPct.toFixed(1)}% vs MEP)`
         : "";
 
+      const indStr = technicalsSuffix(ctx.indicators?.[p.symbol]);
+      const rankStr = rankSuffix(ctx.relativeStrength?.[p.symbol]);
+
       return (
         `${p.symbol} (${p.sector}, ${p.assetType}): ${fmtArs(p.value)} · ${p.weight.toFixed(1)}% de la cartera · P/L ${p.gainPct.toFixed(1)}% · hoy ${p.dayPct.toFixed(1)}% · 30d ${p.trend30d}` +
         ageStr +
         emStr +
-        dpStr
+        dpStr +
+        indStr +
+        rankStr
       );
     })
     .join("\n");
@@ -915,8 +1225,13 @@ export async function advise(
       )
       .join("\n") || "(sin noticias relevantes)",
     "",
-    "ACTIVOS QUE PODÉS SUGERIR (con precio actual):",
-    ctx.universe
+    ctx.universeTotal && ctx.universeTotal > ctx.universe.length
+      ? `ACTIVOS QUE PODÉS SUGERIR (ordenados por fuerza relativa). Son ${ctx.universe.length} de ` +
+        `un universo de ${ctx.universeTotal}: los de mejor ranking más los que ya tenés en ` +
+        "cartera. Los que no están quedaron por debajo en el ranking — no los pidas, no se " +
+        "pueden recomendar."
+      : "ACTIVOS QUE PODÉS SUGERIR (con precio actual, ordenados por fuerza relativa):",
+    byRelativeStrength(ctx.universe, ctx.relativeStrength)
       .map((u) => {
         // La prima acá pesa más que sobre la cartera: sobre lo que ya tenés es
         // información, sobre lo que podrías comprar es una decisión concreta de
@@ -925,7 +1240,12 @@ export async function advise(
         const dpStr = dp
           ? ` · TC implícito ${dp.premiumPct > 0 ? "+" : ""}${dp.premiumPct.toFixed(1)}% vs MEP`
           : "";
-        return `${u.symbol} — ${u.name} (${u.sector})${u.price ? ` · ${fmtArs(u.price)}` : ""}${dpStr}`;
+        // Los indicadores pesan acá igual que la prima: sin ellos el modelo
+        // elige qué comprar mirando solo el precio de hoy, y comprar en
+        // sobrecompra es el error de timing más caro que puede cometer.
+        const indStr = technicalsSuffix(ctx.indicators?.[u.symbol]);
+        const rsStr = strengthSuffix(ctx.relativeStrength?.[u.symbol]);
+        return `${u.symbol} — ${u.name} (${u.sector})${u.price ? ` · ${fmtArs(u.price)}` : ""}${rsStr}${dpStr}${indStr}`;
       })
       .join("\n"),
   ]

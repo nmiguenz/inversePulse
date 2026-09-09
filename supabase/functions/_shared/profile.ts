@@ -8,6 +8,23 @@
 import type { SupabaseClient } from 'https://esm.sh/@supabase/supabase-js@2'
 import type { AdvisorContext, InvestorProfile } from './claude.ts'
 
+/**
+ * Límites de position sizing.
+ *
+ * Son ADICIONALES a los umbrales del usuario, no los reemplazan: los de
+ * `settings` son alertas que el prompt le pide al modelo respetar, y estos son
+ * un techo que el código aplica sobre lo que el modelo devolvió, aunque el
+ * modelo no los haya respetado. Viven acá, al lado de `toAdvisorSettings`,
+ * porque son parte del mismo contrato de riesgo.
+ */
+
+/** Máximo peso que puede alcanzar una posición NUEVA (que no está en cartera). */
+export const MAX_NEW_POSITION_PCT = 8
+/** Máximo peso que puede alcanzar una posición EXISTENTE después de agregar. */
+export const MAX_EXISTING_POSITION_PCT = 15
+/** Máximo peso sectorial después de la operación. */
+export const MAX_SECTOR_AFTER_BUY_PCT = 40
+
 /** Lo que hay guardado en `users.settings`. Todo opcional: viene de un JSONB. */
 export type UserSettings = {
   rebalance_pct?: number
