@@ -279,6 +279,237 @@ export type RelativeStrength = {
   total: number
 }
 
+/** Mínimo de pares para que una correlación signifique algo. */
+const MIN_CORRELATION_PAIRS = 20
+/** Desde acá se considera que dos activos se mueven juntos. */
+const DEFAULT_CORR_THRESHOLD = 0.6
+/** Barras en común que necesitan dos series para poder compararse. */
+const DEFAULT_MIN_BARS = 30
+
+/**
+ * Retornos logarítmicos diarios. Devuelve `prices.length - 1` valores.
+ *
+ * Un precio no positivo hace explotar el logaritmo, así que ese paso sale como
+ * NaN en vez de como un cero: cero afirmaría "no se movió", que es una
+ * observación inventada. `pearsonCorrelation` descarta la serie entera si
+ * encuentra un NaN, que es el resultado correcto — ese par no se puede medir.
+ */
+export function dailyReturns(prices: number[]): number[] {
+  const out: number[] = []
+  for (let i = 1; i < prices.length; i++) {
+    const previo = prices[i - 1]
+    const actual = prices[i]
+    out.push(previo > 0 && actual > 0 ? Math.log(actual / previo) : NaN)
+  }
+  return out
+}
+
+/**
+ * Correlación de Pearson entre dos series de retornos diarios.
+ *
+ * Devuelve null si las series no miden lo mismo, si son cortas, o si alguna no
+ * varía en todo el período: sin varianza el coeficiente es una división por
+ * cero, no un cero.
+ */
+export function pearsonCorrelation(a: number[], b: number[]): number | null {
+  if (a.length !== b.length) return null
+  if (a.length < MIN_CORRELATION_PAIRS) return null
+  if (!a.every(Number.isFinite) || !b.every(Number.isFinite)) return null
+
+  const n = a.length
+  const meanA = a.reduce((s, v) => s + v, 0) / n
+  const meanB = b.reduce((s, v) => s + v, 0) / n
+
+  let cov = 0
+  let varA = 0
+  let varB = 0
+  for (let i = 0; i < n; i++) {
+    const da = a[i] - meanA
+    const dbv = b[i] - meanB
+    cov += da * dbv
+    varA += da * da
+    varB += dbv * dbv
+  }
+
+  if (varA <= 0 || varB <= 0) return null
+
+  const r = cov / Math.sqrt(varA * varB)
+  // El redondeo de punto flotante puede tirar 1.0000000000000002 y romper a
+  // quien asuma el rango.
+  return Math.max(-1, Math.min(1, r))
+}
+
+/**
+ * Cierres de un símbolo indexados por fecha.
+ *
+ * La matriz recibe esto y no un array plano porque las series NO vienen
+ * alineadas: un activo puede no haber cotizado un día que el otro sí. Con dos
+ * arrays sueltos de distinto largo no hay forma de saber qué barra de uno
+ * corresponde a qué barra del otro, y emparejarlas por posición compararía
+ * días distintos — que es exactamente el error que una correlación no perdona.
+ */
+export type PricesByDate = Map<string, number>
+
+/**
+ * Matriz de correlación entre múltiples series.
+ *
+ * Cada par se alinea por su cuenta, quedándose solo con las fechas donde los
+ * DOS tienen precio. Alinear una sola vez contra las fechas comunes a todos
+ * recortaría cada par al peor de la lista.
+ *
+ * Solo devuelve los pares que superan `threshold`. Las correlaciones negativas
+ * quedan afuera a propósito: la matriz existe para detectar concentración
+ * escondida, y dos activos que se mueven al revés no la agravan.
+ *
+ * La clave es "A:B" con los símbolos en orden alfabético, así que cada par
+ * aparece una sola vez y siempre igual.
+ */
+export function correlationMatrix(
+  series: Map<string, PricesByDate>,
+  opts: { threshold?: number; minBars?: number } = {},
+): Map<string, number> {
+  const threshold = opts.threshold ?? DEFAULT_CORR_THRESHOLD
+  const minBars = opts.minBars ?? DEFAULT_MIN_BARS
+  const symbols = [...series.keys()].sort()
+  const out = new Map<string, number>()
+
+  for (let i = 0; i < symbols.length; i++) {
+    for (let j = i + 1; j < symbols.length; j++) {
+      const a = series.get(symbols[i])!
+      const b = series.get(symbols[j])!
+
+      // Fechas en común, en orden. Un cierre no positivo descarta el día:
+      // así los retornos nunca ven un precio con el que no se puede calcular.
+      const fechas = [...a.keys()]
+        .filter((f) => {
+          const pa = a.get(f)
+          const pb = b.get(f)
+          return pa !== undefined && pb !== undefined && pa > 0 && pb > 0
+        })
+        .sort()
+
+      if (fechas.length < minBars) continue
+
+      const r = pearsonCorrelation(
+        dailyReturns(fechas.map((f) => a.get(f)!)),
+        dailyReturns(fechas.map((f) => b.get(f)!)),
+      )
+      if (r === null || r < threshold) continue
+
+      out.set(`${symbols[i]}:${symbols[j]}`, r)
+    }
+  }
+
+  return out
+}
+
+/**
+ * Desglose del score de un activo como candidato a compra.
+ *
+ * Va desglosado y no como un número solo porque el total no dice nada por sí
+ * mismo: 55 puede ser "buen activo en un sector saturado" o "activo mediocre
+ * sin nada en contra", y son decisiones distintas. El modelo necesita ver de
+ * dónde salen los puntos para poder discutirlos.
+ */
+export type ScoreBreakdown = {
+  momentum: number
+  technical: number
+  volume: number
+  correlation: number
+  freshness: number
+  sectorCap: number
+  total: number
+}
+
+/**
+ * Score compuesto de un activo como candidato a compra.
+ *
+ * Los puntajes parciales suman 100 en el mejor caso. No es un puntaje absoluto
+ * — es relativo al estado actual de la cartera. Un activo con score 80 en una
+ * cartera concentrada en tech puede tener score 50 en una diversificada,
+ * porque la penalización de correlación cambia.
+ *
+ * Los datos que faltan no puntúan, con una excepción: el volumen sin datos da
+ * el valor del medio. La diferencia es deliberada — un activo sin RSI es un
+ * activo del que no sabemos nada y no merece puntos, mientras que un volumen
+ * ausente es una limitación NUESTRA (`price_history` todavía no lo guarda) y
+ * castigar a todos por igual solo agregaría ruido al ranking.
+ */
+export function investmentScore(params: {
+  rank: number
+  totalRanked: number
+  rsi: number | null
+  macdSignal: 'alcista' | 'bajista' | 'neutral'
+  aboveSma50: boolean | null
+  aboveSma20: boolean | null
+  avgVolume20d: number | null
+  lastVolume: number | null
+  maxCorrelationWithHeld: number | null
+  sectorWeightPct: number
+  daysSinceLastRec: number | null
+}): ScoreBreakdown {
+  // ── Momentum: en qué percentil del ranking cae ──
+  const percentil = params.totalRanked > 0 ? params.rank / params.totalRanked : 1
+  const momentum = percentil <= 0.10
+    ? 25
+    : percentil <= 0.25
+    ? 20
+    : percentil <= 0.50
+    ? 12
+    : percentil <= 0.75
+    ? 5
+    : 0
+
+  // ── Técnico: RSI + MACD + posición contra las dos medias ──
+  let technical = 0
+  if (params.rsi !== null) {
+    // El mejor puntaje es el rebote potencial (30-50), no el impulso ya
+    // desatado: arriba de 70 comprar es llegar tarde. Sobrevendido puntúa
+    // bien pero menos, porque "barato" también puede ser "cayendo".
+    technical += params.rsi < 30 ? 8 : params.rsi < 50 ? 10 : params.rsi <= 70 ? 5 : 0
+  }
+  technical += params.macdSignal === 'alcista' ? 8 : params.macdSignal === 'neutral' ? 3 : 0
+  if (params.aboveSma50 === true) technical += 4
+  if (params.aboveSma20 === true) technical += 3
+
+  // ── Volumen: interés reciente contra el promedio ──
+  const { avgVolume20d, lastVolume } = params
+  const volume = avgVolume20d !== null && avgVolume20d > 0 && lastVolume !== null
+    ? lastVolume > avgVolume20d * 1.5
+      ? 15
+      : lastVolume >= avgVolume20d * 0.8
+      ? 8
+      : 3
+    : 5
+
+  // ── Correlación: cuánto se parece a lo que ya se tiene ──
+  const corr = params.maxCorrelationWithHeld
+  const correlation = corr === null || corr < 0.7 ? 15 : corr < 0.8 ? 8 : corr < 0.9 ? 3 : 0
+
+  // ── Frescura: no repetir la misma sugerencia todas las semanas ──
+  const dias = params.daysSinceLastRec
+  const freshness = dias === null || dias > 30 ? 10 : dias >= 14 ? 6 : dias >= 7 ? 3 : 0
+
+  // ── Techo sectorial: cuánto pesa ya el sector del activo ──
+  const sectorCap = params.sectorWeightPct < 20
+    ? 10
+    : params.sectorWeightPct < 30
+    ? 6
+    : params.sectorWeightPct < 40
+    ? 2
+    : 0
+
+  return {
+    momentum,
+    technical,
+    volume,
+    correlation,
+    freshness,
+    sectorCap,
+    total: momentum + technical + volume + correlation + freshness + sectorCap,
+  }
+}
+
 /**
  * Todo lo que el asesor mira de un símbolo, calculado de una vez.
  *

@@ -22,6 +22,7 @@ import {
   priceVsSma,
   type RelativeStrength,
   rsiZone,
+  type ScoreBreakdown,
   SMA_LONG,
   SMA_SHORT,
   type Technicals,
@@ -232,6 +233,22 @@ export type AdvisorContext = {
     alphaAvg30d?: string | null;
     alphaAvg7d?: string | null;
   };
+  /**
+   * Pares que se mueven juntos. Key: "SYM_A:SYM_B" en orden alfabético, value:
+   * la correlación. Solo entran los pares por encima del umbral — los que se
+   * mueven cada uno por su lado no cambian ninguna decisión y ocuparían
+   * contexto.
+   */
+  correlations?: Record<string, number>;
+  /**
+   * Score cuantitativo por símbolo del universo.
+   *
+   * Es lo que decidió QUÉ activos llegan hasta acá y en qué orden. El modelo lo
+   * recibe desglosado para poder discutirlo: el total sin sus componentes no
+   * permite distinguir "buen activo en sector saturado" de "activo mediocre sin
+   * nada en contra".
+   */
+  scores?: Record<string, ScoreBreakdown>;
 };
 
 export type PortfolioContext = {
@@ -262,6 +279,8 @@ export type PortfolioContext = {
   indicators?: Record<string, Technicals>;
   /** Fuerza relativa por símbolo — mismo formato que en `AdvisorContext`. */
   relativeStrength?: Record<string, RelativeStrength>;
+  /** Score cuantitativo por símbolo — mismo formato que en `AdvisorContext`. */
+  scores?: Record<string, ScoreBreakdown>;
 };
 
 export type GoalContext = {
@@ -429,6 +448,92 @@ const SIZING_LIMITS = [
   "Si sugerís comprar algo que violaría estos límites, el sistema lo bloquea. Mejor",
   "sugerí un monto que entre dentro de los límites.",
 ].join("\n");
+
+/**
+ * El score y su desglose, para la línea de un activo del universo.
+ *
+ * El total va primero porque es lo que ordena la lista, y el desglose atrás
+ * porque es lo que permite discutirlo.
+ */
+function scoreSuffix(score: ScoreBreakdown | undefined): string {
+  if (!score) return "";
+  return (
+    ` · score ${score.total}/100 (momentum ${score.momentum}, técnico ${score.technical},` +
+    ` vol ${score.volume}, corr ${score.correlation}, fresh ${score.freshness},` +
+    ` sect ${score.sectorCap})`
+  );
+}
+
+/**
+ * Cómo leer el score. Es el mismo texto para el asesor y para la búsqueda de
+ * oportunidades: los dos ven la misma línea.
+ */
+const SCORE_GUIDE = [
+  "SCORE CUANTITATIVO (en la línea de cada activo del universo):",
+  "",
+  "- El score integra momentum, señales técnicas, volumen, correlación con la",
+  "  cartera, frescura y concentración sectorial. 100 es perfecto, 0 es el peor.",
+  "- PRIORIZÁ activos con score > 60 para compras. Activos con score < 40 necesitan",
+  "  una tesis muy fuerte — el scoring dice que no es buen momento.",
+  "- El desglose te dice POR QUÉ el score es alto o bajo. Si un activo tiene buen",
+  "  momentum pero mala correlación, pensá si la tesis justifica la concentración.",
+  "- NO ignores el score. Si sugerís comprar algo con score < 40, explicá",
+  "  explícitamente qué ves vos que el scoring no captura.",
+].join("\n");
+
+/**
+ * Con cuántos activos de la CARTERA se mueve junto un símbolo.
+ *
+ * Solo cuenta los que el usuario ya tiene: la advertencia existe para decir
+ * "esto que querés comprar ya lo tenés puesto de otra forma", y para eso el
+ * otro extremo del par tiene que ser una posición real. Ordenados de más
+ * correlacionado a menos, que es el orden en el que importan.
+ */
+function correlatedHoldings(
+  symbol: string,
+  correlations: Record<string, number> | undefined,
+  held: Set<string>,
+): string[] {
+  if (!correlations) return [];
+
+  const pares: Array<{ otro: string; r: number }> = [];
+  for (const [key, r] of Object.entries(correlations)) {
+    const [a, b] = key.split(":");
+    const otro = a === symbol ? b : b === symbol ? a : null;
+    if (otro && held.has(otro)) pares.push({ otro, r });
+  }
+
+  return pares.sort((x, y) => y.r - x.r).map((p) => p.otro);
+}
+
+/**
+ * La sección de correlaciones, con los pares ordenados de mayor a menor.
+ *
+ * La ventana es la misma serie de cierres que alimenta a los indicadores: 120
+ * días corridos, que son unas 85 ruedas. Si cambia `HISTORY_DAYS` en
+ * `portfolio-advisor`, este texto queda desactualizado.
+ */
+function buildCorrelationSection(correlations: Record<string, number>): string {
+  const pares = Object.entries(correlations).sort((a, b) => b[1] - a[1]);
+
+  return [
+    "CORRELACIONES ALTAS ENTRE POSICIONES (últimos 120 días corridos):",
+    "",
+    ...pares.map(([key, r]) => {
+      const [a, b] = key.split(":");
+      return `${a} ↔ ${b}: ${r.toFixed(2)}`;
+    }),
+    "",
+    "- Dos activos con correlación > 0.7 se mueven juntos: comprar uno cuando ya",
+    "  tenés el otro NO diversifica. Es como duplicar la misma apuesta.",
+    "- ANTES de recomendar comprar o ampliar un activo, fijate si ya hay algo",
+    "  altamente correlacionado en cartera. Si lo hay, explicá por qué vale la pena",
+    "  la concentración extra, o sugerí otra cosa.",
+    "- Si el usuario tiene 3+ activos con correlación > 0.7 entre sí, es una señal",
+    "  de que la cartera está sobreexpuesta a un factor común, aunque los sectores",
+    "  sean distintos.",
+  ].join("\n");
+}
 
 /**
  * Cómo leer el ranking de fuerza relativa.
@@ -744,6 +849,7 @@ function buildOpportunitySystemPrompt(
   profile?: InvestorProfile,
   hasIndicators = false,
   hasStrength = false,
+  hasScores = false,
 ) {
   const isAggressive = profile?.riskProfile === "aggressive";
 
@@ -791,6 +897,8 @@ function buildOpportunitySystemPrompt(
     "",
     hasStrength ? STRENGTH_GUIDE : "",
     "",
+    hasScores ? SCORE_GUIDE : "",
+    "",
     "Devolvé como máximo 3 oportunidades, y solo donde tengas convicción real.",
     "",
     "Tené en cuenta la concentración actual de la cartera: sugerir más de un sector",
@@ -835,7 +943,8 @@ export async function analyzeOpportunities(
       (u) =>
         `${u.symbol} — ${u.name} (${u.sector})${u.price ? ` · ${fmtArs(u.price)}` : ""}` +
         strengthSuffix(ctx.relativeStrength?.[u.symbol]) +
-        technicalsSuffix(ctx.indicators?.[u.symbol]),
+        technicalsSuffix(ctx.indicators?.[u.symbol]) +
+        scoreSuffix(ctx.scores?.[u.symbol]),
     )
     .join("\n");
 
@@ -865,6 +974,7 @@ export async function analyzeOpportunities(
       ctx.profile,
       Object.keys(ctx.indicators ?? {}).length > 0,
       Object.keys(ctx.relativeStrength ?? {}).length > 0,
+      Object.keys(ctx.scores ?? {}).length > 0,
     ),
     messages: [{ role: "user", content: user }],
   });
@@ -1161,6 +1271,10 @@ function buildAdvisorSystemPrompt(ctx: AdvisorContext) {
     hasIndicators ? INDICATOR_GUIDE : "",
     hasStrength ? STRENGTH_GUIDE : "",
     SIZING_LIMITS,
+    Object.keys(ctx.scores ?? {}).length ? SCORE_GUIDE : "",
+    Object.keys(ctx.correlations ?? {}).length
+      ? buildCorrelationSection(ctx.correlations!)
+      : "",
     ctx.trackRecord ? buildTrackRecordSection(ctx.trackRecord) : "",
     hasDollarPremium
       ? [
@@ -1194,6 +1308,8 @@ export async function advise(
 }> {
   if (!apiKey) throw new MissingApiKeyError();
 
+  const heldSymbols = new Set(ctx.positions.map((p) => p.symbol));
+
   const positionLines = ctx.positions
     .map((p) => {
       // Cada sufijo se omite cuando falta el dato: una línea que dice
@@ -1218,13 +1334,21 @@ export async function advise(
       const indStr = technicalsSuffix(ctx.indicators?.[p.symbol]);
       const rankStr = rankSuffix(ctx.relativeStrength?.[p.symbol]);
 
+      // Con un solo par correlacionado la línea ya lo dice la sección de
+      // correlaciones; el warning se reserva para cuando el activo forma parte
+      // de un bloque —dos o más— que se mueve en conjunto.
+      const juntos = correlatedHoldings(p.symbol, ctx.correlations, heldSymbols);
+      const corrStr =
+        juntos.length >= 2 ? ` ⚠ alta correlación con ${juntos.join(", ")}` : "";
+
       return (
         `${p.symbol} (${p.sector}, ${p.assetType}): ${fmtArs(p.value)} · ${p.weight.toFixed(1)}% de la cartera · P/L ${p.gainPct.toFixed(1)}% · hoy ${p.dayPct.toFixed(1)}% · 30d ${p.trend30d}` +
         ageStr +
         emStr +
         dpStr +
         indStr +
-        rankStr
+        rankStr +
+        corrStr
       );
     })
     .join("\n");
@@ -1273,7 +1397,8 @@ export async function advise(
         // sobrecompra es el error de timing más caro que puede cometer.
         const indStr = technicalsSuffix(ctx.indicators?.[u.symbol]);
         const rsStr = strengthSuffix(ctx.relativeStrength?.[u.symbol]);
-        return `${u.symbol} — ${u.name} (${u.sector})${u.price ? ` · ${fmtArs(u.price)}` : ""}${rsStr}${dpStr}${indStr}`;
+        const scStr = scoreSuffix(ctx.scores?.[u.symbol]);
+        return `${u.symbol} — ${u.name} (${u.sector})${u.price ? ` · ${fmtArs(u.price)}` : ""}${rsStr}${dpStr}${indStr}${scStr}`;
       })
       .join("\n"),
   ]

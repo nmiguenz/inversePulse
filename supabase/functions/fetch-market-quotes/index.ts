@@ -338,9 +338,21 @@ async function handle(req: Request): Promise<Response> {
   await saveImpliedFx(db, fxRows, 'fetch-market-quotes')
 
   // El cierre del día alimenta la variación semanal de las próximas corridas
+  //
+  // El volumen va desde ahora: la columna existe desde la 0001 pero nunca se
+  // escribió, así que estaba vacía en las 1.501 filas. Lo consume la componente
+  // de volumen del score del asesor, que compara la última rueda contra el
+  // promedio de 20 — o sea que empieza a puntuar de verdad recién cuando se
+  // junten 20 ruedas desde este deploy. Hasta entonces el score le da a todos
+  // el valor neutro.
   const today = todayBA()
   const { error: historyError } = await db.from('price_history').upsert(
-    quotes.map((q) => ({ symbol: q.symbol, close_price: q.price, recorded_at: today })),
+    quotes.map((q) => ({
+      symbol: q.symbol,
+      close_price: q.price,
+      volume: q.volume,
+      recorded_at: today,
+    })),
     { onConflict: 'symbol,recorded_at' },
   )
   if (historyError) throw historyError

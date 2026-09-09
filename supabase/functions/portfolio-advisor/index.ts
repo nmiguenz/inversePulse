@@ -13,9 +13,14 @@ import { advise, fmtArs, OPPORTUNITY_MODEL, type Recommendation } from '../_shar
 import { getUserApiKey, markApiKeyUsed } from '../_shared/apiKey.ts'
 import { canUseAI } from '../_shared/market.ts'
 import {
+  correlationMatrix,
+  investmentScore,
+  macdSignal,
   periodReturn,
+  type PricesByDate,
   relativeStrengthRank,
   type RelativeStrength,
+  type ScoreBreakdown,
   technicals,
   type Technicals,
 } from '../_shared/indicators.ts'
@@ -86,14 +91,25 @@ const TREND_DAYS = 30
  */
 const RETURN_BARS = { d7: 5, d30: 21, d90: 62 }
 
+/** Ruedas del promedio de volumen contra el que se compara la última. */
+const VOLUME_BARS = 20
+
+/**
+ * Hasta cuántos días atrás se mira si un símbolo ya fue recomendado.
+ *
+ * Más de 30 días puntúa igual que no haberlo recomendado nunca, así que traer
+ * más historia que eso serían filas que no cambian ningún score.
+ */
+const RECENT_REC_DAYS = 35
+
 /**
  * A partir de acá el universo se recorta antes de mandarlo al modelo.
  *
- * Un universo de decenas de activos, cada uno con retornos, ranking e
+ * Un universo de decenas de activos, cada uno con retornos, ranking, score e
  * indicadores, son varios miles de tokens de entrada por corrida, y buena
- * parte de esa lista no se va a recomendar nunca. Se mandan los de mejor
- * momentum y los que el usuario tiene, que son los únicos sobre los que puede
- * sugerir vender.
+ * parte de esa lista no se va a recomendar nunca. Se mandan los de mejor SCORE
+ * y los que el usuario tiene, que son los únicos sobre los que puede sugerir
+ * vender.
  */
 const UNIVERSE_TRIM_OVER = 30
 const UNIVERSE_TOP = 20
@@ -143,7 +159,7 @@ const HISTORY_PAGE = 1000
 /** Freno de bucle: 30 páginas son 30.000 filas, muy por encima de lo posible. */
 const MAX_HISTORY_PAGES = 30
 
-type PriceRow = { symbol: string; close_price: number; recorded_at: string }
+type PriceRow = { symbol: string; close_price: number; recorded_at: string; volume: number | null }
 
 /**
  * El histórico completo de la ventana, paginado.
@@ -159,7 +175,7 @@ async function fetchPriceHistory(since: string): Promise<PriceRow[]> {
   for (let page = 0; page < MAX_HISTORY_PAGES; page++) {
     const { data, error } = await db
       .from('price_history')
-      .select('symbol, close_price, recorded_at')
+      .select('symbol, close_price, recorded_at, volume')
       .gte('recorded_at', since)
       // El símbolo desempata: sin un orden total, dos páginas pueden repetir
       // una fila y saltearse otra del mismo día.
@@ -280,6 +296,27 @@ function enforcePositionLimits(
 
 /** El benchmark contra el que se mide el alpha. Ver la 0038. */
 const BENCHMARK = 'SPY'
+
+/**
+ * Desde acá dos activos se consideran "la misma apuesta" para el prompt.
+ *
+ * La matriz por dentro puede usar un piso más bajo; este es el que decide qué
+ * se le muestra al modelo.
+ */
+const CORRELATION_THRESHOLD = 0.7
+
+/**
+ * Tipos que no entran en la matriz de correlación.
+ *
+ * Un money market sube todos los días un poquito y un bono se mueve por tasa y
+ * por CER: correlacionarlos contra una acción da números altísimos que no
+ * significan "se mueven juntos" sino "los dos suben". El valor de la columna es
+ * 'CEDEAR' en singular y también existe 'ACCION' —verificado contra la base—,
+ * así que se excluye por lista negra en vez de exigir un tipo: las acciones
+ * locales son tan capaces de esconder concentración como los CEDEARs, y dos
+ * bancos argentinos correlacionados son justamente el caso que esto busca.
+ */
+const UNCORRELATABLE_TYPES = new Set(['FCI', 'BONO'])
 
 /** Cuántas recomendaciones ya evaluadas se miran para armar el historial. */
 const TRACK_RECORD_SIZE = 20
@@ -504,7 +541,12 @@ Deno.serve(async (req) => {
           .in('impact_level', ['high', 'medium'])
           .order('created_at', { ascending: false })
           .limit(NEWS_CONTEXT),
-        db.from('asset_metadata').select('symbol, display_name, sector').eq('suggestable', true),
+        // `asset_type` es para la matriz de correlación: los FCI y los bonos
+        // quedan afuera.
+        db
+          .from('asset_metadata')
+          .select('symbol, display_name, sector, asset_type')
+          .eq('suggestable', true),
         // Sin filtro por símbolo a propósito: trae la serie de la cartera Y la
         // del universo sugerible, que es lo que permite rankearlos juntos.
         fetchPriceHistory(new Date(Date.now() - HISTORY_DAYS * 864e5).toISOString().slice(0, 10)),
@@ -530,16 +572,47 @@ Deno.serve(async (req) => {
     const trendCutoff = new Date(Date.now() - TREND_DAYS * 864e5).toISOString().slice(0, 10)
     const seriesBySymbol = new Map<string, number[]>()
     const trendSeriesBySymbol = new Map<string, number[]>()
+    // La misma serie pero indexada por fecha, que es lo que necesita la matriz
+    // de correlación para emparejar dos activos día contra día.
+    const closesByDate = new Map<string, PricesByDate>()
+    const volumesBySymbol = new Map<string, number[]>()
     for (const row of history) {
       const list = seriesBySymbol.get(row.symbol) ?? []
       list.push(row.close_price)
       seriesBySymbol.set(row.symbol, list)
+
+      const porFecha = closesByDate.get(row.symbol) ?? new Map<string, number>()
+      porFecha.set(row.recorded_at, row.close_price)
+      closesByDate.set(row.symbol, porFecha)
+
+      // Los nulos no se guardan: `price_history.volume` existe desde la 0001
+      // pero recién ahora se empieza a escribir, así que la serie arranca corta
+      // y con huecos viejos.
+      if (row.volume !== null && Number.isFinite(row.volume)) {
+        const vols = volumesBySymbol.get(row.symbol) ?? []
+        vols.push(row.volume)
+        volumesBySymbol.set(row.symbol, vols)
+      }
 
       if (row.recorded_at >= trendCutoff) {
         const recent = trendSeriesBySymbol.get(row.symbol) ?? []
         recent.push(row.close_price)
         trendSeriesBySymbol.set(row.symbol, recent)
       }
+    }
+
+    // Volumen: promedio de las últimas ruedas contra la más reciente. Si no
+    // hay ventana completa el promedio queda en null y el score le da el puntaje
+    // del medio — es una limitación de nuestros datos, no del activo.
+    const volumeBySymbol = new Map<string, { avg: number | null; last: number | null }>()
+    for (const [symbol, vols] of volumesBySymbol) {
+      const ventana = vols.slice(-VOLUME_BARS)
+      volumeBySymbol.set(symbol, {
+        avg: ventana.length >= VOLUME_BARS
+          ? ventana.reduce((sum, v) => sum + v, 0) / ventana.length
+          : null,
+        last: vols[vols.length - 1],
+      })
     }
 
     const priceBySymbol = new Map(positions.map((p) => [p.symbol, p.current_price]))
@@ -584,7 +657,8 @@ Deno.serve(async (req) => {
     // Los tres alimentan reglas del prompt que sin el dato no pueden evaluarse:
     // los 14 días de una posición nueva, el riesgo de recomendar contra un
     // earnings, y si el CEDEAR está caro en pesos.
-    const [{ data: buys }, { data: earnings }, { data: quotes }, { data: mepRate }] = await Promise.all([
+    const [{ data: buys }, { data: earnings }, { data: quotes }, { data: mepRate }, { data: recentRecs }] =
+      await Promise.all([
       // `kind`, NO `side`: en fetch-transactions los dividendos también se
       // guardan con side='buy', y como acá interesa la operación MÁS VIEJA,
       // un dividendo viejo se haría pasar por la compra original.
@@ -618,6 +692,16 @@ Deno.serve(async (req) => {
         .order('recorded_at', { ascending: false })
         .limit(1)
         .maybeSingle(),
+      // Cuándo se recomendó cada símbolo por última vez: es la componente de
+      // frescura del score, la que evita repetir la misma sugerencia cada
+      // corrida hasta que el usuario la ejecute por cansancio.
+      db
+        .from('recommendations')
+        .select('symbol, created_at')
+        .eq('user_id', user.id)
+        .is('goal_id', null)
+        .gte('created_at', new Date(Date.now() - RECENT_REC_DAYS * 864e5).toISOString())
+        .order('created_at', { ascending: false }),
     ])
 
     // Ambas listas vienen ordenadas ascendente, así que la primera aparición de
@@ -628,6 +712,17 @@ Deno.serve(async (req) => {
       if (t.symbol && !(t.symbol in positionAges)) {
         positionAges[t.symbol] = Math.floor((Date.now() - new Date(t.executed_at).getTime()) / 864e5)
       }
+    }
+
+    // Viene ordenada descendente, así que la primera aparición de cada símbolo
+    // ya es la más reciente.
+    const daysSinceLastRec = new Map<string, number>()
+    for (const r of recentRecs ?? []) {
+      if (!r.symbol || daysSinceLastRec.has(r.symbol)) continue
+      daysSinceLastRec.set(
+        r.symbol,
+        Math.floor((Date.now() - new Date(r.created_at).getTime()) / 864e5),
+      )
     }
 
     const earningsInDays = new Map<string, number>()
@@ -689,21 +784,97 @@ Deno.serve(async (req) => {
       }
     }
 
-    // Universo recortado: los de mejor momentum más los que el usuario tiene,
-    // que son los únicos sobre los que puede sugerir vender. El orden por rank
-    // se mantiene, así que lo primero que lee el modelo es lo más fuerte.
-    const rankOf = (symbol: string) => relativeStrength[symbol]?.rank ?? Number.MAX_SAFE_INTEGER
-    const universeByRank = [...universe].sort((a, b) => rankOf(a.symbol) - rankOf(b.symbol))
+    // ---------- Correlaciones ----------
+    // Sobre la cartera y el universo ENTERO, no solo lo que se manda: el score
+    // de cada candidato necesita saber cuánto se parece a lo que ya se tiene, y
+    // eso hay que saberlo ANTES de decidir cuál entra en el recorte. Son unos
+    // pocos miles de pares de aritmética local; lo caro nunca fue el cálculo
+    // sino el contexto, y para eso está el filtro de más abajo.
+    const correlatables = new Set<string>()
+    for (const p of positions) {
+      if (!UNCORRELATABLE_TYPES.has(p.asset_type)) correlatables.add(p.symbol)
+    }
+    for (const u of universe) {
+      if (!UNCORRELATABLE_TYPES.has(u.asset_type)) correlatables.add(u.symbol)
+    }
+
+    const matrixInput = new Map<string, PricesByDate>()
+    for (const symbol of correlatables) {
+      const porFecha = closesByDate.get(symbol)
+      if (porFecha) matrixInput.set(symbol, porFecha)
+    }
+    const matrix = correlationMatrix(matrixInput, { threshold: CORRELATION_THRESHOLD })
+
+    // Lo más parecido que ya se tiene, por simbolo: es la componente de
+    // correlación del score.
     const held = new Set(heldSymbols)
+    const maxCorrWithHeld = new Map<string, number>()
+    for (const [par, r] of matrix) {
+      const [a, b] = par.split(':')
+      for (const [uno, otro] of [[a, b], [b, a]]) {
+        if (!held.has(otro) || held.has(uno)) continue
+        maxCorrWithHeld.set(uno, Math.max(maxCorrWithHeld.get(uno) ?? 0, r))
+      }
+    }
+
+    // ---------- Score cuantitativo ----------
+    // Es lo que decide QUÉ ve el modelo y en que orden. La IA explica y matiza
+    // lo que el score ya seleccionó, en vez de elegir ella desde una lista
+    // plana.
+    const sectorPctOf = (sector: string) =>
+      totalValue > 0 ? ((sectorTotals.get(sector) ?? 0) / totalValue) * 100 : 0
+
+    const scores: Record<string, ScoreBreakdown> = {}
+    for (const u of universe) {
+      const rs = relativeStrength[u.symbol]
+      const ind = indicators[u.symbol]
+      const vol = volumeBySymbol.get(u.symbol)
+
+      scores[u.symbol] = investmentScore({
+        // Sin ranking, el activo va al fondo: no puntúa un momentum que no se
+        // pudo medir.
+        rank: rs?.rank ?? ranking.length,
+        totalRanked: ranking.length,
+        rsi: ind?.rsi14 ?? null,
+        macdSignal: ind?.macd ? (macdSignal(ind.macd, ind.price) as 'alcista' | 'bajista' | 'neutral') : 'neutral',
+        aboveSma50: ind?.sma50 != null ? ind.price > ind.sma50 : null,
+        aboveSma20: ind?.sma20 != null ? ind.price > ind.sma20 : null,
+        avgVolume20d: vol?.avg ?? null,
+        lastVolume: vol?.last ?? null,
+        maxCorrelationWithHeld: maxCorrWithHeld.get(u.symbol) ?? null,
+        sectorWeightPct: sectorPctOf(u.sector),
+        daysSinceLastRec: daysSinceLastRec.get(u.symbol) ?? null,
+      })
+    }
+
+    // Universo recortado POR SCORE, no por ranking: el momentum sigue adentro
+    // como una de las seis componentes. Lo primero que lee el modelo es lo
+    // mejor puntuado, y lo que el usuario ya tiene entra siempre para que pueda
+    // sugerir vender.
+    const scoreOf = (symbol: string) => scores[symbol]?.total ?? -1
+    const universeByScore = [...universe].sort((a, b) => scoreOf(b.symbol) - scoreOf(a.symbol))
     const sentUniverse =
-      universeByRank.length > UNIVERSE_TRIM_OVER
-        ? universeByRank.filter((u, i) => i < UNIVERSE_TOP || held.has(u.symbol))
-        : universeByRank
+      universeByScore.length > UNIVERSE_TRIM_OVER
+        ? universeByScore.filter((u, i) => i < UNIVERSE_TOP || held.has(u.symbol))
+        : universeByScore
 
     console.log(
       sentUniverse.length < universe.length
-        ? `[advisor] universo: ${universe.length} activos, top ${sentUniverse.length} enviados al modelo`
+        ? `[advisor] universo: ${universe.length} activos, top ${sentUniverse.length} por score enviados al modelo`
         : `[advisor] universo: ${universe.length} activos, todos enviados al modelo`,
+    )
+
+    // Al prompt solo van los pares donde los DOS extremos son visibles para el
+    // modelo. Un par entre dos activos que no ve es contexto que no puede usar.
+    const visibles = new Set([...heldSymbols, ...sentUniverse.map((u) => u.symbol)])
+    const correlations: Record<string, number> = {}
+    for (const [par, r] of matrix) {
+      const [a, b] = par.split(':')
+      if (visibles.has(a) && visibles.has(b)) correlations[par] = r
+    }
+    console.log(
+      `[advisor] correlaciones: ${Object.keys(correlations).length} pares >= ${CORRELATION_THRESHOLD} ` +
+        `de ${matrix.size} calculados sobre ${matrixInput.size} activos`,
     )
 
     const mep = mepRate?.sell_price ?? 0
@@ -817,6 +988,12 @@ Deno.serve(async (req) => {
         relativeStrength,
         universeTotal: universe.length,
         trackRecord,
+        correlations,
+        // Solo los del universo que efectivamente se manda: un score de algo
+        // que el modelo no ve en la lista es una línea que no puede usar.
+        scores: Object.fromEntries(
+          sentUniverse.map((u) => [u.symbol, scores[u.symbol]]).filter(([, v]) => v),
+        ) as Record<string, ScoreBreakdown>,
       })
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err)
