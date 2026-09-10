@@ -51,6 +51,7 @@ import {
   VOLUME_BARS,
 } from '../_shared/indicators.ts'
 import { fetchPriceHistory, type PriceRow } from '../_shared/priceHistory.ts'
+import { regimeFromPrices, toUsdSeries } from '../_shared/marketRegime.ts'
 import { UNCORRELATABLE_TYPES } from '../_shared/profile.ts'
 
 const db = createClient(
@@ -168,6 +169,14 @@ export function simulate(
   history: PriceRow[],
   months: number,
   scoring: { weights: ScoreWeights; contrarianRsi: boolean } = VARIANTES[VARIANTE_DEFAULT],
+  /**
+   * MEP por fecha, para medir el régimen en dólares.
+   *
+   * Hoy llega casi vacío —`daily_mep` arranca sin historia y no hay backfill
+   * posible—, así que las semanas viejas se miden en pesos igual que antes. El
+   * backtest mejora solo a medida que la tabla se llena.
+   */
+  mepByDate: Map<string, number> = new Map(),
 ): BacktestOutput {
   // Los FCI y los bonos no son candidatos: un money market sube todos los días
   // un poquito y sin volatilidad, así que barre cualquier ranking de momentum y
@@ -299,6 +308,22 @@ export function simulate(
       pesoSector.set(sector, (pesoSector.get(sector) ?? 0) + 100 / holdings.length)
     }
 
+    // ── Régimen de esa semana ──
+    // Solo con SPY: las noticias de hace ocho meses no están en `news_analysis`
+    // y la cartera de entonces no existe, así que faltan dos de los cuatro
+    // factores. El régimen que ve el backtest es más benigno que el real —
+    // subestima, nunca exagera.
+    const spyHasta = seriesHasta.get(BENCHMARK) ?? []
+    const spyFechasHasta = (datesBySymbol.get(BENCHMARK) ?? [])
+      .filter((f) => f <= asOf && f >= ventanaDesde)
+    const spyUsd = mepByDate.size
+      ? toUsdSeries(
+        spyFechasHasta.map((f) => ({ date: f, close: closesByDate.get(BENCHMARK)!.get(f)! })),
+        mepByDate,
+      )
+      : null
+    const regimen = regimeFromPrices(spyHasta, spyUsd)
+
     // ── Score ──
     const scores: Array<{ symbol: string; score: ScoreBreakdown }> = []
     for (const u of universe) {
@@ -316,27 +341,30 @@ export function simulate(
         ? Math.floor((asOfMs - Date.parse(`${ultimaRec}T00:00:00Z`)) / DAY_MS)
         : null
 
+      const crudo = investmentScore({
+        rank: rankOf.get(u.symbol) ?? ranking.length,
+        totalRanked: ranking.length,
+        rsi: ind?.rsi14 ?? null,
+        macdSignal: ind?.macd
+          ? (macdSignal(ind.macd, ind.price) as 'alcista' | 'bajista' | 'neutral')
+          : 'neutral',
+        aboveSma50: ind?.sma50 != null ? ind.price > ind.sma50 : null,
+        aboveSma20: ind?.sma20 != null ? ind.price > ind.sma20 : null,
+        avgVolume20d: ventanaVol.length >= VOLUME_BARS
+          ? ventanaVol.reduce((s, v) => s + v, 0) / ventanaVol.length
+          : null,
+        lastVolume: vols.length ? vols[vols.length - 1] : null,
+        maxCorrelationWithHeld: maxCorrConCartera.get(u.symbol) ?? null,
+        sectorWeightPct: pesoSector.get(u.sector) ?? 0,
+        daysSinceLastRec: diasDesdeRec,
+        weights: scoring.weights,
+        contrarianRsi: scoring.contrarianRsi,
+      })
+
+      // Mismo tratamiento que en producción: el régimen multiplica el total.
       scores.push({
         symbol: u.symbol,
-        score: investmentScore({
-          rank: rankOf.get(u.symbol) ?? ranking.length,
-          totalRanked: ranking.length,
-          rsi: ind?.rsi14 ?? null,
-          macdSignal: ind?.macd
-            ? (macdSignal(ind.macd, ind.price) as 'alcista' | 'bajista' | 'neutral')
-            : 'neutral',
-          aboveSma50: ind?.sma50 != null ? ind.price > ind.sma50 : null,
-          aboveSma20: ind?.sma20 != null ? ind.price > ind.sma20 : null,
-          avgVolume20d: ventanaVol.length >= VOLUME_BARS
-            ? ventanaVol.reduce((s, v) => s + v, 0) / ventanaVol.length
-            : null,
-          lastVolume: vols.length ? vols[vols.length - 1] : null,
-          maxCorrelationWithHeld: maxCorrConCartera.get(u.symbol) ?? null,
-          sectorWeightPct: pesoSector.get(u.sector) ?? 0,
-          daysSinceLastRec: diasDesdeRec,
-          weights: scoring.weights,
-          contrarianRsi: scoring.contrarianRsi,
-        }),
+        score: { ...crudo, total: Math.round(crudo.total * regimen.scoringModifier) },
       })
     }
 
@@ -526,7 +554,17 @@ Deno.serve(async (req) => {
     return Response.json({ error: 'no hay price_history en la ventana pedida' }, { status: 400 })
   }
 
-  const out = simulate(universe, history, months, scoring)
+  // El MEP disponible del período. Mientras `daily_mep` esté vacía esto es un
+  // mapa vacío y el régimen se mide en pesos, que es el comportamiento actual.
+  const { data: mepRows } = await db
+    .from('daily_mep')
+    .select('recorded_date, mep_rate')
+    .gte('recorded_date', isoDate(desdeMs))
+  const mepByDate = new Map(
+    (mepRows ?? []).map((r) => [String(r.recorded_date), Number(r.mep_rate)]),
+  )
+
+  const out = simulate(universe, history, months, scoring, mepByDate)
   const resultados = out.weeks
 
   // ---------- Persistencia ----------

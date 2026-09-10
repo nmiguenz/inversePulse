@@ -19,6 +19,7 @@ import {
   investmentScore,
   macdSignal,
   periodReturn,
+  realizedVol,
   type PricesByDate,
   relativeStrengthRank,
   type RelativeStrength,
@@ -29,6 +30,7 @@ import {
   VOLUME_BARS,
 } from '../_shared/indicators.ts'
 import { fetchPriceHistory } from '../_shared/priceHistory.ts'
+import { detectMarketRegime } from '../_shared/marketRegime.ts'
 import {
   buildInvestorProfile,
   MAX_EXISTING_POSITION_PCT,
@@ -96,37 +98,6 @@ const RECENT_REC_DAYS = 35
 const UNIVERSE_TRIM_OVER = 30
 const UNIVERSE_TOP = 20
 
-/** Días de mercado en un año, para anualizar la volatilidad diaria. */
-const TRADING_DAYS = 252
-/** Menos que esto no alcanza para un desvío que signifique algo. */
-const MIN_VOL_SAMPLES = 10
-
-/**
- * Volatilidad realizada anualizada, en %.
- *
- * Reemplaza a la implied volatility de opciones: en BCBA los CEDEARs no tienen
- * opciones listadas (`get_options_chain` devuelve 404 para NVDA, AAPL y MSFT),
- * así que la IV no existe para esta cartera. La volatilidad realizada se saca
- * de `price_history`, que ya se está leyendo para la tendencia de 30 días.
- *
- * Devuelve null si la serie es corta o si hay precios no positivos — un cero
- * en la serie haría explotar el logaritmo.
- */
-function realizedVol(prices: number[]): number | null {
-  if (prices.length < MIN_VOL_SAMPLES) return null
-
-  const returns: number[] = []
-  for (let i = 1; i < prices.length; i++) {
-    if (prices[i] <= 0 || prices[i - 1] <= 0) return null
-    returns.push(Math.log(prices[i] / prices[i - 1]))
-  }
-  if (returns.length < 2) return null
-
-  const mean = returns.reduce((s, r) => s + r, 0) / returns.length
-  // Muestral (n-1): son una muestra de los retornos, no la población entera.
-  const variance = returns.reduce((s, r) => s + (r - mean) ** 2, 0) / (returns.length - 1)
-  return Math.sqrt(variance) * Math.sqrt(TRADING_DAYS) * 100
-}
 
 
 /**
@@ -632,6 +603,28 @@ Deno.serve(async (req) => {
       }
     }
 
+    // El cierre de MEP del día, para poder convertir CEDEARs a dólares.
+    //
+    // `dollar_rates` guarda un registro cada diez minutos y se poda, así que no
+    // sirve como serie; en `daily_mep` queda uno por fecha. Va montado en las
+    // dos corridas diarias del asesor: el upsert deja una sola fila por día y
+    // no hace falta un cron nuevo.
+    //
+    // Se escribe ACÁ y no más abajo a propósito: el detector de régimen lee la
+    // tabla, así que si el upsert fuera después, en la primera corrida del día
+    // la conversión a dólares se perdería la rueda de hoy.
+    //
+    // Si falla, se registra y se sigue: el régimen tiene fallback en pesos y
+    // una recomendación no se pierde por esto.
+    const mepHoy = mepRate?.sell_price ?? 0
+    if (mepHoy > 0) {
+      const { error: mepError } = await db.from('daily_mep').upsert(
+        { recorded_date: new Date().toISOString().slice(0, 10), mep_rate: mepHoy },
+        { onConflict: 'recorded_date' },
+      )
+      if (mepError) console.error('[advisor] no se pudo guardar el MEP del día:', mepError.message)
+    }
+
     // Viene ordenada descendente, así que la primera aparición de cada símbolo
     // ya es la más reciente.
     const daysSinceLastRec = new Map<string, number>()
@@ -735,6 +728,16 @@ Deno.serve(async (req) => {
       }
     }
 
+    // ---------- Régimen de mercado ----------
+    // Va ANTES del scoring porque el scoring lo consume: el modificador entra
+    // como multiplicador del total, así que un día defensivo baja a todo el
+    // universo de una sola vez en vez de tener que discutirlo activo por activo.
+    const regime = await detectMarketRegime(db, user.id)
+    console.log(
+      `[advisor] régimen: ${regime.regime} (confidence ${regime.confidence}) — ` +
+        `SPY ${regime.spyTrend}, ${regime.newsSentiment}`,
+    )
+
     // ---------- Score cuantitativo ----------
     // Es lo que decide QUÉ ve el modelo y en que orden. La IA explica y matiza
     // lo que el score ya seleccionó, en vez de elegir ella desde una lista
@@ -748,7 +751,7 @@ Deno.serve(async (req) => {
       const ind = indicators[u.symbol]
       const vol = volumeBySymbol.get(u.symbol)
 
-      scores[u.symbol] = investmentScore({
+      const crudo = investmentScore({
         // Sin ranking, el activo va al fondo: no puntúa un momentum que no se
         // pudo medir.
         rank: rs?.rank ?? ranking.length,
@@ -763,6 +766,17 @@ Deno.serve(async (req) => {
         sectorWeightPct: sectorPctOf(u.sector),
         daysSinceLastRec: daysSinceLastRec.get(u.symbol) ?? null,
       })
+
+      // El régimen multiplica el TOTAL, no las componentes: el desglose sigue
+      // mostrando de dónde salieron los puntos y el total dice cuánto valen
+      // hoy. Con modificador 0.5, un activo excelente de 80 queda en 40 y no
+      // llega al umbral de 60 que el prompt le pide al modelo — que es
+      // exactamente el efecto buscado: en días malos el scoring dice "no
+      // compres nada" solo.
+      scores[u.symbol] = {
+        ...crudo,
+        total: Math.round(crudo.total * regime.scoringModifier),
+      }
     }
 
     // Universo recortado POR SCORE, no por ranking: el momentum sigue adentro
@@ -795,7 +809,7 @@ Deno.serve(async (req) => {
         `de ${matrix.size} calculados sobre ${matrixInput.size} activos`,
     )
 
-    const mep = mepRate?.sell_price ?? 0
+    const mep = mepHoy
     const dollarPremium: Record<string, { implicit: number; mep: number; premiumPct: number }> = {}
     if (mep > 0) {
       for (const q of quotes ?? []) {
@@ -906,6 +920,7 @@ Deno.serve(async (req) => {
         relativeStrength,
         universeTotal: universe.length,
         trackRecord,
+        regime,
         correlations,
         // Solo los del universo que efectivamente se manda: un score de algo
         // que el modelo no ve en la lista es una línea que no puede usar.

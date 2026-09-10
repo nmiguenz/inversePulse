@@ -75,6 +75,40 @@ export const VOLUME_BARS = 20
 /** Desde acá dos activos se consideran "la misma apuesta". */
 export const CORRELATION_THRESHOLD = 0.7
 
+/** Días de mercado en un año, para anualizar la volatilidad diaria. */
+const TRADING_DAYS = 252
+/** Menos que esto no alcanza para un desvío que signifique algo. */
+const MIN_VOL_SAMPLES = 10
+
+/**
+ * Volatilidad realizada anualizada, en %.
+ *
+ * Reemplaza a la implied volatility de opciones: en BCBA los CEDEARs no tienen
+ * opciones listadas, así que la IV no existe para esta cartera.
+ *
+ * La ventana la elige quien llama, recortando la serie: el asesor la usa sobre
+ * 30 días y el detector de régimen compara 10 contra 30 para ver si la
+ * volatilidad se está expandiendo.
+ *
+ * Devuelve null si la serie es corta o si hay precios no positivos — un cero en
+ * la serie haría explotar el logaritmo.
+ */
+export function realizedVol(prices: number[]): number | null {
+  if (prices.length < MIN_VOL_SAMPLES) return null
+
+  const returns: number[] = []
+  for (let i = 1; i < prices.length; i++) {
+    if (prices[i] <= 0 || prices[i - 1] <= 0) return null
+    returns.push(Math.log(prices[i] / prices[i - 1]))
+  }
+  if (returns.length < 2) return null
+
+  const mean = returns.reduce((sum, r) => sum + r, 0) / returns.length
+  // Muestral (n-1): son una muestra de los retornos, no la población entera.
+  const variance = returns.reduce((sum, r) => sum + (r - mean) ** 2, 0) / (returns.length - 1)
+  return Math.sqrt(variance) * Math.sqrt(TRADING_DAYS) * 100
+}
+
 /** Una serie con un NaN o un infinito envenena todo lo que se calcule con ella. */
 function usable(prices: number[]): boolean {
   return prices.every((p) => Number.isFinite(p))

@@ -31,6 +31,7 @@ import {
 // cap. `profile.ts` importa de acá solo TIPOS (`import type`, que se borra al
 // compilar), así que en runtime no hay ciclo: claude.ts → profile.ts y nada
 // de vuelta.
+import type { RegimeSignal } from "./marketRegime.ts";
 import {
   MAX_EXISTING_POSITION_PCT,
   MAX_NEW_POSITION_PCT,
@@ -249,6 +250,14 @@ export type AdvisorContext = {
    * nada en contra".
    */
   scores?: Record<string, ScoreBreakdown>;
+  /**
+   * El régimen de mercado del momento.
+   *
+   * Va primero en el prompt, antes que cualquier otra cosa: es la diferencia
+   * entre "hoy se opera normal" y "hoy se protege capital", y leerlo después de
+   * las reglas de rotación sería leerlo tarde.
+   */
+  regime?: RegimeSignal;
 };
 
 export type PortfolioContext = {
@@ -426,6 +435,47 @@ const INDICATOR_GUIDE = [
   "NUNCA recomiendes comprar un activo con RSI > 70. Es la regla más importante",
   "de timing.",
 ].join("\n");
+
+/**
+ * El régimen de mercado, como primera cosa que lee el modelo.
+ *
+ * El scoring ya trae el régimen adentro —los scores vienen multiplicados por
+ * `scoringModifier`, así que en un día malo casi nada llega al umbral de 60—,
+ * pero eso el modelo no lo ve: solo ve números más bajos. Esta sección le dice
+ * POR QUÉ están bajos, que es lo que le permite explicárselo al usuario en vez
+ * de inventar una razón.
+ */
+function buildRegimeSection(regime: RegimeSignal): string {
+  const lineas = [
+    `⚠️ RÉGIMEN DE MERCADO: ${regime.regime.toUpperCase()} (confianza ${regime.confidence}%)`,
+    regime.summary,
+    "",
+    "Factores:",
+    ...regime.factors.map((f) => `- [${f.signal}] ${f.source}: ${f.detail}`),
+    "",
+    "INSTRUCCIONES DE RÉGIMEN:",
+    "- RISK_ON: operá normal. Compras, rotaciones y oportunidades son válidas.",
+    "- RISK_OFF: modo defensivo. No recomiendes compras a menos que la tesis sea",
+    "  extraordinaria Y el activo tenga score > 70. Priorizá holds. Si hay posiciones",
+    "  con pérdida > stop_loss, considerá trim. No recomiendes ampliar posiciones en",
+    "  sectores sobreexpuestos.",
+    "- CRISIS: solo hold o reducir exposición. Ninguna compra, ninguna rotación.",
+    "  El objetivo es preservar capital, punto.",
+  ]
+
+  if (regime.regime !== "risk_on") {
+    // El score que ve en la lista ya viene multiplicado. Sin esta línea, un
+    // universo entero por debajo de 60 parece un universo sin oportunidades en
+    // lugar de un mercado que no está para comprar.
+    lineas.push(
+      "",
+      `Los scores del universo ya vienen multiplicados por ${regime.scoringModifier} por el régimen: ` +
+        "si ves todo por debajo de 60, es esto y no una casualidad.",
+    )
+  }
+
+  return lineas.join("\n")
+}
 
 /**
  * Los límites de concentración que el código aplica pase lo que pase.
@@ -1090,6 +1140,10 @@ function buildAdvisorSystemPrompt(ctx: AdvisorContext) {
   const hasStrength = Object.keys(ctx.relativeStrength ?? {}).length > 0;
 
   return [
+    // ── El régimen va PRIMERO, antes incluso de la identidad ──
+    // Es el marco que cambia cómo se leen todas las reglas que siguen.
+    ctx.regime ? buildRegimeSection(ctx.regime) : "",
+
     // ── Identidad del asesor, adaptada al perfil del usuario ──
     `Sos asesor financiero con perfil ${isAggressive ? "AGRESIVO orientado a maximizar crecimiento" : "MODERADO equilibrado"},`,
     "especializado en CEDEARs argentinos.",
