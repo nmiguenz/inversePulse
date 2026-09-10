@@ -25,6 +25,18 @@ export const MAX_EXISTING_POSITION_PCT = 15
 /** Máximo peso sectorial después de la operación. */
 export const MAX_SECTOR_AFTER_BUY_PCT = 40
 
+/**
+ * Tipos que no entran en la matriz de correlación.
+ *
+ * Un money market sube todos los días un poquito y un bono se mueve por tasa y
+ * por CER: correlacionarlos contra una acción da números altísimos que no
+ * significan "se mueven juntos" sino "los dos suben". El valor de la columna es
+ * 'CEDEAR' en singular y también existe 'ACCION' —verificado contra la base—,
+ * así que se excluye por lista negra en vez de exigir un tipo: las acciones
+ * locales esconden concentración igual que los CEDEARs.
+ */
+export const UNCORRELATABLE_TYPES = new Set(['FCI', 'BONO'])
+
 /** Lo que hay guardado en `users.settings`. Todo opcional: viene de un JSONB. */
 export type UserSettings = {
   rebalance_pct?: number

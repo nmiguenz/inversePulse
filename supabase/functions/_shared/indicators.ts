@@ -45,6 +45,36 @@ const MACD_NEUTRAL_BAND = 0.005
 export const SMA_SHORT = 20
 export const SMA_LONG = 50
 
+/**
+ * Ventana de cierres sobre la que se calcula TODO, en días corridos.
+ *
+ * `price_history` guarda un cierre por rueda, así que los días corridos se
+ * convierten a ~5/7. Lo que manda es el retorno de 90 días: para tenerlo hace
+ * falta la barra de hace ~62 ruedas MÁS la de hoy, y 90 días corridos dan justo
+ * ~62 — un feriado y el retorno sale null para todos. 120 corridos dan ~85
+ * ruedas, que cubren con margen los tres retornos, la SMA50 y el MACD.
+ *
+ * Vive acá y no en `portfolio-advisor` porque el backtest tiene que usar
+ * exactamente la misma ventana: si simula con más historia de la que ve
+ * producción, mide otra estrategia.
+ */
+export const HISTORY_DAYS = 120
+
+/**
+ * Cuántas RUEDAS cubre cada plazo del ranking de fuerza relativa.
+ *
+ * Los retornos se cuentan en barras, no en fechas: la serie tiene un cierre por
+ * rueda, así que 7 días corridos son 5 barras, 30 son ~21 y 90 son ~62. La
+ * etiqueta que ve el modelo sigue siendo el plazo de calendario.
+ */
+export const RETURN_BARS = { d7: 5, d30: 21, d90: 62 }
+
+/** Ruedas del promedio de volumen contra el que se compara la última. */
+export const VOLUME_BARS = 20
+
+/** Desde acá dos activos se consideran "la misma apuesta". */
+export const CORRELATION_THRESHOLD = 0.7
+
 /** Una serie con un NaN o un infinito envenena todo lo que se calcule con ella. */
 function usable(prices: number[]): boolean {
   return prices.every((p) => Number.isFinite(p))
@@ -404,6 +434,66 @@ export function correlationMatrix(
 }
 
 /**
+ * Cuánto vale, como máximo, cada componente del score.
+ *
+ * Se sacaron a un objeto para poder correr el backtest con varias
+ * configuraciones sin tocar la lógica: lo que cambia es cuánto PESA cada
+ * componente, no cómo se evalúa. Las bandas de RSI, MACD, volumen y demás son
+ * las mismas en todas las variantes (la única excepción está documentada en
+ * `contrarianRsi`).
+ */
+export type ScoreWeights = {
+  momentum: number
+  technical: number
+  volume: number
+  correlation: number
+  freshness: number
+  sectorCap: number
+}
+
+/** Los pesos originales. Es lo que usa producción y el default de la función. */
+export const SCORE_WEIGHTS_V1: ScoreWeights = {
+  momentum: 25,
+  technical: 25,
+  volume: 15,
+  correlation: 15,
+  freshness: 10,
+  sectorCap: 10,
+}
+
+/** Baja momentum, sube técnico. Hipótesis: el momentum extendido revierte. */
+export const SCORE_WEIGHTS_V2: ScoreWeights = {
+  momentum: 10,
+  technical: 35,
+  volume: 15,
+  correlation: 15,
+  freshness: 10,
+  sectorCap: 15,
+}
+
+/** Contrarian: premia pullback en tendencia. Va con `contrarianRsi`. */
+export const SCORE_WEIGHTS_V3: ScoreWeights = {
+  momentum: 5,
+  technical: 40,
+  volume: 15,
+  correlation: 15,
+  freshness: 15,
+  sectorCap: 10,
+}
+
+/**
+ * Cómo se reparte la componente técnica entre sus cuatro señales.
+ *
+ * Son las proporciones que tenía la versión original (10, 8, 4 y 3 puntos sobre
+ * 25), expresadas como fracción para que sigan valiendo cuando el máximo de la
+ * componente deja de ser 25.
+ */
+const RSI_SHARE = 10 / 25
+const MACD_SHARE = 8 / 25
+const SMA50_SHARE = 4 / 25
+const SMA20_SHARE = 3 / 25
+
+/**
  * Desglose del score de un activo como candidato a compra.
  *
  * Va desglosado y no como un número solo porque el total no dice nada por sí
@@ -424,16 +514,20 @@ export type ScoreBreakdown = {
 /**
  * Score compuesto de un activo como candidato a compra.
  *
- * Los puntajes parciales suman 100 en el mejor caso. No es un puntaje absoluto
- * — es relativo al estado actual de la cartera. Un activo con score 80 en una
- * cartera concentrada en tech puede tener score 50 en una diversificada,
- * porque la penalización de correlación cambia.
+ * Los puntajes parciales suman 100 en el mejor caso —con los pesos por defecto—
+ * y cada componente vale una fracción de su máximo según lo que observó. No es
+ * un puntaje absoluto: es relativo al estado actual de la cartera. Un activo con
+ * score 80 en una cartera concentrada en tech puede tener score 50 en una
+ * diversificada, porque la penalización de correlación cambia.
  *
- * Los datos que faltan no puntúan, con una excepción: el volumen sin datos da
- * el valor del medio. La diferencia es deliberada — un activo sin RSI es un
- * activo del que no sabemos nada y no merece puntos, mientras que un volumen
- * ausente es una limitación NUESTRA (`price_history` todavía no lo guarda) y
- * castigar a todos por igual solo agregaría ruido al ranking.
+ * Los datos que faltan no puntúan, con una excepción: el volumen sin datos da el
+ * valor del medio. La diferencia es deliberada — un activo sin RSI es un activo
+ * del que no sabemos nada y no merece puntos, mientras que un volumen ausente es
+ * una limitación NUESTRA y castigar a todos por igual solo agregaría ruido.
+ *
+ * Cada componente se redondea a entero: con pesos que no son múltiplos de las
+ * fracciones internas los parciales salen con decimales, y un desglose que no
+ * cierra con su total es más confuso que la precisión que se pierde.
  */
 export function investmentScore(params: {
   rank: number
@@ -447,57 +541,93 @@ export function investmentScore(params: {
   maxCorrelationWithHeld: number | null
   sectorWeightPct: number
   daysSinceLastRec: number | null
+  weights?: ScoreWeights
+  /**
+   * Invierte la lectura del RSI: la mejor nota pasa a ser el activo sobrevendido
+   * que se está dando vuelta (30-45) en lugar del que todavía no se estiró.
+   * Es la hipótesis contrarian de V3, y la ÚNICA banda que cambia entre
+   * variantes.
+   */
+  contrarianRsi?: boolean
 }): ScoreBreakdown {
+  const w = params.weights ?? SCORE_WEIGHTS_V1
+
   // ── Momentum: en qué percentil del ranking cae ──
   const percentil = params.totalRanked > 0 ? params.rank / params.totalRanked : 1
-  const momentum = percentil <= 0.10
-    ? 25
+  const momentumFrac = percentil <= 0.10
+    ? 1
     : percentil <= 0.25
-    ? 20
+    ? 0.8
     : percentil <= 0.50
-    ? 12
+    ? 0.48
     : percentil <= 0.75
-    ? 5
+    ? 0.2
     : 0
 
   // ── Técnico: RSI + MACD + posición contra las dos medias ──
-  let technical = 0
+  let rsiFrac = 0
   if (params.rsi !== null) {
-    // El mejor puntaje es el rebote potencial (30-50), no el impulso ya
-    // desatado: arriba de 70 comprar es llegar tarde. Sobrevendido puntúa
-    // bien pero menos, porque "barato" también puede ser "cayendo".
-    technical += params.rsi < 30 ? 8 : params.rsi < 50 ? 10 : params.rsi <= 70 ? 5 : 0
+    rsiFrac = params.contrarianRsi
+      // Contrarian: lo que más puntúa es el rebote empezado.
+      ? params.rsi < 30
+        ? 0.5
+        : params.rsi < 45
+        ? 1
+        : params.rsi < 55
+        ? 0.6
+        : params.rsi <= 70
+        ? 0.3
+        : 0
+      // El mejor puntaje es el rebote potencial (30-50), no el impulso ya
+      // desatado: arriba de 70 comprar es llegar tarde. Sobrevendido puntúa
+      // bien pero menos, porque "barato" también puede ser "cayendo".
+      : params.rsi < 30
+      ? 0.8
+      : params.rsi < 50
+      ? 1
+      : params.rsi <= 70
+      ? 0.5
+      : 0
   }
-  technical += params.macdSignal === 'alcista' ? 8 : params.macdSignal === 'neutral' ? 3 : 0
-  if (params.aboveSma50 === true) technical += 4
-  if (params.aboveSma20 === true) technical += 3
+  const macdFrac = params.macdSignal === 'alcista' ? 1 : params.macdSignal === 'neutral' ? 0.375 : 0
+  const technicalFrac = RSI_SHARE * rsiFrac +
+    MACD_SHARE * macdFrac +
+    SMA50_SHARE * (params.aboveSma50 === true ? 1 : 0) +
+    SMA20_SHARE * (params.aboveSma20 === true ? 1 : 0)
 
   // ── Volumen: interés reciente contra el promedio ──
   const { avgVolume20d, lastVolume } = params
-  const volume = avgVolume20d !== null && avgVolume20d > 0 && lastVolume !== null
+  const volumeFrac = avgVolume20d !== null && avgVolume20d > 0 && lastVolume !== null
     ? lastVolume > avgVolume20d * 1.5
-      ? 15
+      ? 1
       : lastVolume >= avgVolume20d * 0.8
-      ? 8
-      : 3
-    : 5
+      ? 8 / 15
+      : 3 / 15
+    : 5 / 15
 
   // ── Correlación: cuánto se parece a lo que ya se tiene ──
   const corr = params.maxCorrelationWithHeld
-  const correlation = corr === null || corr < 0.7 ? 15 : corr < 0.8 ? 8 : corr < 0.9 ? 3 : 0
+  const correlationFrac = corr === null || corr < 0.7 ? 1 : corr < 0.8 ? 8 / 15 : corr < 0.9 ? 3 / 15 : 0
 
   // ── Frescura: no repetir la misma sugerencia todas las semanas ──
   const dias = params.daysSinceLastRec
-  const freshness = dias === null || dias > 30 ? 10 : dias >= 14 ? 6 : dias >= 7 ? 3 : 0
+  const freshnessFrac = dias === null || dias > 30 ? 1 : dias >= 14 ? 0.6 : dias >= 7 ? 0.3 : 0
 
   // ── Techo sectorial: cuánto pesa ya el sector del activo ──
-  const sectorCap = params.sectorWeightPct < 20
-    ? 10
+  const sectorFrac = params.sectorWeightPct < 20
+    ? 1
     : params.sectorWeightPct < 30
-    ? 6
+    ? 0.6
     : params.sectorWeightPct < 40
-    ? 2
+    ? 0.2
     : 0
+
+  const momentum = Math.round(w.momentum * momentumFrac)
+  const technical = Math.round(w.technical * technicalFrac)
+  const volume = Math.round(w.volume * volumeFrac)
+  const correlation = Math.round(w.correlation * correlationFrac)
+  const freshness = Math.round(w.freshness * freshnessFrac)
+  const sectorCap = Math.round(w.sectorCap * sectorFrac)
 
   return {
     momentum,

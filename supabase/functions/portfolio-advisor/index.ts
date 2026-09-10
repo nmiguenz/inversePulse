@@ -13,23 +13,29 @@ import { advise, fmtArs, OPPORTUNITY_MODEL, type Recommendation } from '../_shar
 import { getUserApiKey, markApiKeyUsed } from '../_shared/apiKey.ts'
 import { canUseAI } from '../_shared/market.ts'
 import {
+  CORRELATION_THRESHOLD,
   correlationMatrix,
+  HISTORY_DAYS,
   investmentScore,
   macdSignal,
   periodReturn,
   type PricesByDate,
   relativeStrengthRank,
   type RelativeStrength,
+  RETURN_BARS,
   type ScoreBreakdown,
   technicals,
   type Technicals,
+  VOLUME_BARS,
 } from '../_shared/indicators.ts'
+import { fetchPriceHistory } from '../_shared/priceHistory.ts'
 import {
   buildInvestorProfile,
   MAX_EXISTING_POSITION_PCT,
   MAX_NEW_POSITION_PCT,
   MAX_SECTOR_AFTER_BUY_PCT,
   toAdvisorSettings,
+  UNCORRELATABLE_TYPES,
   type UserSettings,
 } from '../_shared/profile.ts'
 import { sendPush } from '../_shared/push.ts'
@@ -61,38 +67,14 @@ function trend(prices: number[]): string {
 }
 
 /**
- * Ventana de `price_history` que se lee, en días corridos.
- *
- * `price_history` guarda un cierre por rueda, así que los días corridos se
- * convierten a ~5/7. Lo que manda es el retorno de 90 días: para tenerlo hace
- * falta la barra de hace ~62 ruedas MÁS la de hoy, y 90 días corridos dan
- * justo ~62 — un feriado o un día que el CRON no escribió y el retorno sale
- * null para todos. 120 corridos dan ~85 ruedas, que cubren con margen los tres
- * retornos, la SMA50 y el MACD.
- */
-const HISTORY_DAYS = 120
-/**
  * Ventana de la tendencia y la volatilidad, en días corridos.
  *
- * Sigue siendo 30 aunque la consulta traiga 120: el prompt dice "30d" y "vol
- * de los últimos 30 días", así que estirarlas cambiaría en silencio lo que el
- * asesor cree estar leyendo. Los indicadores usan la serie larga; la tendencia
- * y la volatilidad, el tramo corto.
+ * Sigue siendo 30 aunque la consulta traiga `HISTORY_DAYS`: el prompt dice
+ * "30d" y "vol de los últimos 30 días", así que estirarlas cambiaría en
+ * silencio lo que el asesor cree estar leyendo. Los indicadores usan la serie
+ * larga; la tendencia y la volatilidad, el tramo corto.
  */
 const TREND_DAYS = 30
-
-/**
- * Cuántas RUEDAS cubre cada plazo del ranking de fuerza relativa.
- *
- * Los retornos se cuentan en barras, no en fechas: la serie tiene un cierre
- * por rueda, así que 7 días corridos son 5 barras, 30 son ~21 y 90 son ~62. La
- * etiqueta que ve el modelo sigue siendo el plazo de calendario, que es como
- * se lee un retorno.
- */
-const RETURN_BARS = { d7: 5, d30: 21, d90: 62 }
-
-/** Ruedas del promedio de volumen contra el que se compara la última. */
-const VOLUME_BARS = 20
 
 /**
  * Hasta cuántos días atrás se mira si un símbolo ya fue recomendado.
@@ -146,53 +128,6 @@ function realizedVol(prices: number[]): number | null {
   return Math.sqrt(variance) * Math.sqrt(TRADING_DAYS) * 100
 }
 
-/**
- * Filas por página del histórico.
- *
- * La consulta trae la serie de TODOS los símbolos —cartera y universo— y la
- * API de Supabase corta en 1.000 filas por request. Con ~45 símbolos × ~85
- * ruedas son casi 4.000: sin paginar, PostgREST devolvía las 1.000 más VIEJAS
- * (la consulta ordena ascendente) y todos los indicadores se calculaban sobre
- * precios de hace meses, sin un solo error visible.
- */
-const HISTORY_PAGE = 1000
-/** Freno de bucle: 30 páginas son 30.000 filas, muy por encima de lo posible. */
-const MAX_HISTORY_PAGES = 30
-
-type PriceRow = { symbol: string; close_price: number; recorded_at: string; volume: number | null }
-
-/**
- * El histórico completo de la ventana, paginado.
- *
- * Avanza por la cantidad de filas que REALMENTE devolvió cada página, no por
- * el tamaño pedido: si el proyecto tiene configurado un tope más bajo que
- * `HISTORY_PAGE`, esto sigue leyendo desde donde quedó en vez de saltearse el
- * resto. Corta con la primera página vacía.
- */
-async function fetchPriceHistory(since: string): Promise<PriceRow[]> {
-  const rows: PriceRow[] = []
-
-  for (let page = 0; page < MAX_HISTORY_PAGES; page++) {
-    const { data, error } = await db
-      .from('price_history')
-      .select('symbol, close_price, recorded_at, volume')
-      .gte('recorded_at', since)
-      // El símbolo desempata: sin un orden total, dos páginas pueden repetir
-      // una fila y saltearse otra del mismo día.
-      .order('recorded_at')
-      .order('symbol')
-      .range(rows.length, rows.length + HISTORY_PAGE - 1)
-
-    if (error) {
-      console.error('[advisor] price_history:', error.message)
-      break
-    }
-    if (!data?.length) break
-    rows.push(...data)
-  }
-
-  return rows
-}
 
 /**
  * Recorta las compras que romperían los límites de concentración.
@@ -296,27 +231,6 @@ function enforcePositionLimits(
 
 /** El benchmark contra el que se mide el alpha. Ver la 0038. */
 const BENCHMARK = 'SPY'
-
-/**
- * Desde acá dos activos se consideran "la misma apuesta" para el prompt.
- *
- * La matriz por dentro puede usar un piso más bajo; este es el que decide qué
- * se le muestra al modelo.
- */
-const CORRELATION_THRESHOLD = 0.7
-
-/**
- * Tipos que no entran en la matriz de correlación.
- *
- * Un money market sube todos los días un poquito y un bono se mueve por tasa y
- * por CER: correlacionarlos contra una acción da números altísimos que no
- * significan "se mueven juntos" sino "los dos suben". El valor de la columna es
- * 'CEDEAR' en singular y también existe 'ACCION' —verificado contra la base—,
- * así que se excluye por lista negra en vez de exigir un tipo: las acciones
- * locales son tan capaces de esconder concentración como los CEDEARs, y dos
- * bancos argentinos correlacionados son justamente el caso que esto busca.
- */
-const UNCORRELATABLE_TYPES = new Set(['FCI', 'BONO'])
 
 /** Cuántas recomendaciones ya evaluadas se miran para armar el historial. */
 const TRACK_RECORD_SIZE = 20
@@ -549,7 +463,11 @@ Deno.serve(async (req) => {
           .eq('suggestable', true),
         // Sin filtro por símbolo a propósito: trae la serie de la cartera Y la
         // del universo sugerible, que es lo que permite rankearlos juntos.
-        fetchPriceHistory(new Date(Date.now() - HISTORY_DAYS * 864e5).toISOString().slice(0, 10)),
+        fetchPriceHistory(
+          db,
+          new Date(Date.now() - HISTORY_DAYS * 864e5).toISOString().slice(0, 10),
+          (m) => console.error('[advisor] price_history:', m),
+        ),
       ])
 
     if (!positions?.length || !universe?.length) {
