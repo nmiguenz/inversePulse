@@ -125,6 +125,10 @@ function enforcePositionLimits(
   totalValue: number,
   sectorWeights: Map<string, number>,
   universe: Array<{ symbol: string; sector: string }>,
+  /** Peso de cada sector AL COSTO, en %. Es el que manda para el límite sectorial. */
+  sectorCostPcts: Map<string, number>,
+  /** Total invertido al costo, para traducir el margen sectorial a pesos. */
+  costBasis: number,
 ): Recommendation[] {
   if (totalValue <= 0) return recs
 
@@ -144,16 +148,26 @@ function enforcePositionLimits(
     const currentWeight = currentPosition ? (currentPosition.value / totalValue) * 100 : 0
     const maxWeight = currentPosition ? MAX_EXISTING_POSITION_PCT : MAX_NEW_POSITION_PCT
     const currentSectorPct = sectorWeights.get(sector) ?? 0
+    const sectorCostPct = sectorCostPcts.get(sector) ?? 0
 
     const maxByPosition = Math.max(
       0,
       ((maxWeight - currentWeight) / 100) * totalValue - (committedBySymbol.get(rec.symbol) ?? 0),
     )
+
+    // El techo sectorial se mide AL COSTO, no a mercado.
+    //
+    // Si el sector pasó el 40% porque lo que tenías subió, seguís teniendo
+    // margen: acertaste la tesis y frenarte por eso sería castigarte por tener
+    // razón. Si lo pasó porque pusiste plata hasta ahí, se bloquea.
+    //
+    // El margen sale del costo: cuánto más se puede INVERTIR antes de que el
+    // costo acumulado del sector llegue al 40% del costo total.
     const maxBySector = Math.max(
       0,
-      currentSectorPct >= MAX_SECTOR_AFTER_BUY_PCT
+      sectorCostPct >= MAX_SECTOR_AFTER_BUY_PCT
         ? 0
-        : ((MAX_SECTOR_AFTER_BUY_PCT - currentSectorPct) / 100) * totalValue -
+        : ((MAX_SECTOR_AFTER_BUY_PCT - sectorCostPct) / 100) * costBasis -
           (committedBySector.get(sector) ?? 0),
     )
 
@@ -165,10 +179,12 @@ function enforcePositionLimits(
       // usuario por qué no puede comprar.
       const motivo = maxByPosition <= 0
         ? `la posición ya pesa ${currentWeight.toFixed(1)}% (máx ${maxWeight}%)`
-        : `el sector ${sector} ya pesa ${currentSectorPct.toFixed(0)}% (máx ${MAX_SECTOR_AFTER_BUY_PCT}%)`
+        : `el sector ${sector} ya pesa ${sectorCostPct.toFixed(0)}% AL COSTO ` +
+          `(máx ${MAX_SECTOR_AFTER_BUY_PCT}%; a mercado está ${currentSectorPct.toFixed(0)}%)`
 
       console.warn(
-        `[advisor] ${rec.symbol}: bloqueada por límite de ${currentWeight.toFixed(0)}% posición / ${currentSectorPct.toFixed(0)}% sector`,
+        `[advisor] ${rec.symbol}: bloqueada — ${currentWeight.toFixed(0)}% posición / ` +
+          `sector ${sectorCostPct.toFixed(0)}% al costo (${currentSectorPct.toFixed(0)}% a mercado)`,
       )
       return {
         ...rec,
@@ -186,8 +202,14 @@ function enforcePositionLimits(
     committedBySector.set(sector, (committedBySector.get(sector) ?? 0) + cappedAmount)
 
     if (cappedAmount < rec.suggested_amount_ars) {
+      // Cuando el sector ya pasó el tope a mercado pero todavía tiene margen al
+      // costo, la diferencia explica por qué la compra se permitió igual.
+      const detalleSector = currentSectorPct >= MAX_SECTOR_AFTER_BUY_PCT
+        ? ` — sector ${sector} al ${currentSectorPct.toFixed(0)}% de mercado ` +
+          `(${sectorCostPct.toFixed(0)}% al costo): margen disponible`
+        : ''
       console.log(
-        `[advisor] ${rec.symbol}: monto reducido de $${rec.suggested_amount_ars} a $${cappedAmount.toFixed(0)} por límites`,
+        `[advisor] ${rec.symbol}: monto reducido de $${rec.suggested_amount_ars} a $${cappedAmount.toFixed(0)} por límites${detalleSector}`,
       )
       return {
         ...rec,
@@ -202,6 +224,50 @@ function enforcePositionLimits(
 
 /** El benchmark contra el que se mide el alpha. Ver la 0038. */
 const BENCHMARK = 'SPY'
+
+/**
+ * Gradúa el monto de cada compra según el score del activo.
+ *
+ * `enforcePositionLimits` es un TECHO: dice cuánto se puede como máximo. Esto es
+ * otra capa y contesta otra pregunta: dentro de lo permitido, cuánto conviene.
+ * Un activo de score 90 y uno de 35 pueden caber los dos en el límite, y no
+ * merecen el mismo tamaño.
+ *
+ * El factor va de 0.3 a 1.0: NUNCA elimina una compra, solo la achica. Si el
+ * score fuera un filtro, un activo malo quedaría en cero — y el backtest no le
+ * encontró alpha a ninguna de las tres variantes de pesos, así que no tiene
+ * autoridad para vetar nada. Sí la tiene para inclinar el tamaño.
+ *
+ * El score ya viene multiplicado por el régimen de mercado, así que en un día
+ * defensivo todas las compras se achican solas sin una regla aparte.
+ */
+function graduateSizing(
+  recs: Recommendation[],
+  scores: Record<string, ScoreBreakdown>,
+): Recommendation[] {
+  return recs.map((rec) => {
+    if (rec.action !== 'buy' && rec.action !== 'add') return rec
+    if (!rec.suggested_amount_ars) return rec
+
+    // Un activo de la cartera que no está en el universo sugerible no tiene
+    // score: se asume neutral, y la nota lo dice para no inventar un número.
+    const conocido = scores[rec.symbol]?.total
+    const score = conocido ?? 50
+    const factor = 0.3 + (score / 100) * 0.7
+
+    const adjusted = Math.round(rec.suggested_amount_ars * factor)
+    if (adjusted >= rec.suggested_amount_ars) return rec
+
+    const detalle = conocido === undefined
+      ? 'sin score propio, se asume neutral 50/100'
+      : `score ${score}/100`
+    return {
+      ...rec,
+      suggested_amount_ars: adjusted,
+      reasoning: `${rec.reasoning}\n\nNota: monto ajustado por ${detalle} (factor ${factor.toFixed(2)}).`,
+    }
+  })
+}
 
 /** Cuántas recomendaciones ya evaluadas se miran para armar el historial. */
 const TRACK_RECORD_SIZE = 20
@@ -412,7 +478,7 @@ Deno.serve(async (req) => {
         db
           .from('positions')
           .select(
-            'symbol, sector, asset_type, rescue_time, quantity, current_price, previous_close, market_value, gain_pct',
+            'symbol, sector, asset_type, rescue_time, quantity, current_price, avg_buy_price, previous_close, market_value, gain_pct',
           )
           .eq('user_id', user.id),
         db.from('account_balance').select('available_ars, available_to_trade_ars').eq('user_id', user.id).maybeSingle(),
@@ -507,6 +573,31 @@ Deno.serve(async (req) => {
     const priceBySymbol = new Map(positions.map((p) => [p.symbol, p.current_price]))
     const sectorTotals = new Map<string, number>()
     for (const p of positions) sectorTotals.set(p.sector, (sectorTotals.get(p.sector) ?? 0) + valueOf(p))
+
+    // El mismo reparto, pero AL COSTO: lo que se puso, no lo que vale.
+    //
+    // Son dos preguntas distintas y el límite sectorial contesta la segunda.
+    // Un sector puede pasar el 40% de la cartera por dos motivos opuestos: se
+    // compró de más, o se acertó la tesis y subió. Frenar el segundo caso
+    // castiga por tener razón — y encima empuja a vender al ganador para
+    // "rebalancear", que es justo lo que las reglas de timing prohíben.
+    //
+    // `avg_buy_price` viene del `ppc` de IOL, que ya es el precio promedio
+    // ponderado de compra.
+    const costOf = (p: { avg_buy_price: number | null; quantity: number }) =>
+      (p.avg_buy_price ?? 0) * p.quantity
+    const costBasis = positions.reduce((sum, p) => sum + costOf(p), 0)
+
+    const sectorCostBasis = new Map<string, number>()
+    for (const p of positions) {
+      sectorCostBasis.set(p.sector, (sectorCostBasis.get(p.sector) ?? 0) + costOf(p))
+    }
+    const sectorCostPcts = new Map(
+      [...sectorCostBasis.entries()].map(([sector, cost]) => [
+        sector,
+        costBasis > 0 ? (cost / costBasis) * 100 : 0,
+      ]),
+    )
 
     // Composición por tipo: es lo que le permite ver que hay una porción
     // grande en fondos comunes mientras el objetivo es que la cartera crezca
@@ -783,8 +874,41 @@ Deno.serve(async (req) => {
     // como una de las seis componentes. Lo primero que lee el modelo es lo
     // mejor puntuado, y lo que el usuario ya tiene entra siempre para que pueda
     // sugerir vender.
+    // Pre-filtrado: fuera los activos cuyo sector ya llegó al tope AL COSTO.
+    //
+    // Son compras que `enforcePositionLimits` va a bloquear igual, así que
+    // mandárselas al modelo es pagar tokens para que razone una tesis que el
+    // código va a tirar. Los que YA están en cartera pasan siempre: sobre ellos
+    // el modelo puede sugerir vender o reducir, que es lo contrario de lo que
+    // el límite frena.
+    //
+    // NO se filtra por score. El backtest no le encontró alpha a ninguna de las
+    // tres variantes, así que usarlo de filtro sería filtrar por ruido; el score
+    // ordena la lista e informa al modelo, nada más.
+    const sectorLleno = (sector: string) =>
+      (sectorCostPcts.get(sector) ?? 0) >= MAX_SECTOR_AFTER_BUY_PCT
+    const excluidos = universe.filter((u) => !held.has(u.symbol) && sectorLleno(u.sector))
+    const universoFiltrado = universe.filter(
+      (u) => held.has(u.symbol) || !sectorLleno(u.sector),
+    )
+
+    if (excluidos.length) {
+      const porSector = new Map<string, string[]>()
+      for (const u of excluidos) {
+        porSector.set(u.sector, [...(porSector.get(u.sector) ?? []), u.symbol])
+      }
+      console.log(
+        '[advisor] excluidos por sector al costo: ' +
+          [...porSector.entries()]
+            .map(([sector, syms]) =>
+              `${syms.join(', ')} (${sector} ${(sectorCostPcts.get(sector) ?? 0).toFixed(0)}% costo)`
+            )
+            .join(' · '),
+      )
+    }
+
     const scoreOf = (symbol: string) => scores[symbol]?.total ?? -1
-    const universeByScore = [...universe].sort((a, b) => scoreOf(b.symbol) - scoreOf(a.symbol))
+    const universeByScore = [...universoFiltrado].sort((a, b) => scoreOf(b.symbol) - scoreOf(a.symbol))
     const sentUniverse =
       universeByScore.length > UNIVERSE_TRIM_OVER
         ? universeByScore.filter((u, i) => i < UNIVERSE_TOP || held.has(u.symbol))
@@ -959,6 +1083,8 @@ Deno.serve(async (req) => {
       totalValue,
       sectorPcts,
       universe.map((u) => ({ symbol: u.symbol, sector: u.sector })),
+      sectorCostPcts,
+      costBasis,
     )
 
     // ---------- Precio del benchmark al momento de recomendar ----------
@@ -979,9 +1105,27 @@ Deno.serve(async (req) => {
       console.warn(`[advisor] sin precio de ${BENCHMARK}: las recomendaciones de hoy quedan sin alpha`)
     }
 
+    // Dentro de lo que el techo permite, el score inclina el tamaño.
+    const graduado = graduateSizing(sized, scores)
+
+    // Una línea que cuenta el viaje entero: sirve para saber en qué paso se
+    // perdió una recomendación cuando el resultado no es el esperado.
+    const buysFinales = graduado.filter((r) => r.action === 'buy' || r.action === 'add').length
+    const holdsPorLimite = sized.filter(
+      (r, i) => r.action === 'hold' && recommendations[i].action !== 'hold',
+    ).length
+    const ajustados = graduado.filter(
+      (r, i) => r.suggested_amount_ars !== sized[i].suggested_amount_ars,
+    ).length
+    console.log(
+      `[advisor] pipeline: universo ${universe.length} → excluidos sector-costo ${excluidos.length} → ` +
+        `enviados ${sentUniverse.length} → modelo devolvió ${recommendations.length} → ` +
+        `post-limits ${buysFinales} buys + ${holdsPorLimite} hold → post-sizing ajustados ${ajustados}`,
+    )
+
     // El monto sugerido no puede superar el efectivo real, diga lo que diga el
     // modelo: es la única validación que protege plata de verdad.
-    const clean = sized.map((r: Recommendation) => {
+    const clean = graduado.map((r: Recommendation) => {
       const isBuy = r.action === 'buy' || r.action === 'add'
       const amount =
         isBuy && r.suggested_amount_ars

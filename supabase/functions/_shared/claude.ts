@@ -494,7 +494,9 @@ const SIZING_LIMITS = [
   "",
   `Posición nueva: máximo ${MAX_NEW_POSITION_PCT}% de la cartera.`,
   `Posición existente: máximo ${MAX_EXISTING_POSITION_PCT}% de la cartera después de agregar.`,
-  `Sector: máximo ${MAX_SECTOR_AFTER_BUY_PCT}% de la cartera después de la compra.`,
+  `Sector: máximo ${MAX_SECTOR_AFTER_BUY_PCT}% de la cartera AL COSTO (lo que invertiste,`,
+  "no lo que vale). Si un sector pasó ese techo solo porque subió de precio, podés",
+  "seguir comprando — acertaste la tesis. Si lo pasó porque pusiste más plata, no podés.",
   "Si sugerís comprar algo que violaría estos límites, el sistema lo bloquea. Mejor",
   "sugerí un monto que entre dentro de los límites.",
 ].join("\n");

@@ -13,7 +13,10 @@ No es solo un visor de cartera — es un **asistente de inversión automatizado*
 - **Charts:** Recharts
 - **PWA:** vite-plugin-pwa + Workbox (para push notifications y offline)
 - **Backend:** Supabase (Postgres + Auth + Edge Functions + Realtime + pg_cron)
-- **AI:** Claude API (Sonnet 4.6) para análisis de noticias, sugerencias de inversión y resúmenes
+- **AI:** Claude API, con dos modelos según la tarea:
+  - **Opus 5** (`claude-opus-5`) en `portfolio-advisor` y `goal-advisor` — son decisiones sobre plata real.
+  - **Sonnet 5** (`claude-sonnet-5`) en `fetch-news` — clasificación de alto volumen, tarea simple.
+  - **Cada usuario carga su propia API key** desde Configuración. No hay key global del proyecto.
 - **Push Notifications:** Web Push API con VAPID keys
 - **Deploy:** Vercel
 - **Fuentes de datos:**
@@ -38,16 +41,27 @@ No es solo un visor de cartera — es un **asistente de inversión automatizado*
 │  Auth ─── Postgres DB ─── Realtime (WS)      │
 │                │                             │
 │         Edge Functions (CRON):               │
-│         ├── fetch-portfolio    (cada 5 min)  │
-│         ├── evaluate-alerts    (cada 5 min)  │
-│         ├── fetch-news         (cada 30 min) │
-│         ├── analyze-opportunities (cada 1h)  │
-│         ├── fetch-dollar-rates (cada 10 min) │
-│         └── earnings-reminder  (diaria 9AM)  │
+│         ├── fetch-portfolio     (cada 5 min) │
+│         ├── evaluate-alerts     (tras cada   │
+│         │                        fetch)      │
+│         ├── fetch-news          (cada 30 min)│
+│         ├── fetch-dollar-rates  (cada 10 min)│
+│         ├── fetch-market-quotes (al cierre)  │
+│         ├── fetch-transactions  (al cierre)  │
+│         ├── portfolio-advisor   (2x/día)     │
+│         ├── evaluate-recommend. (diaria)     │
+│         ├── evaluate-performance (semanal)   │
+│         ├── goal-advisor        (semanal)    │
+│         ├── earnings-reminder   (diaria)     │
+│         └── keep-session-alive  (cada 6h)    │
+│                                              │
+│         A mano (nunca por CRON):             │
+│         ├── backfill-prices  (carga histórica)│
+│         └── backtest         (simulación)    │
 │                │                             │
 │         External APIs:                       │
 │         ├── IOL Inversiones API              │
-│         ├── Claude API (análisis/sugerencias) │
+│         ├── Claude API (key de cada usuario) │
 │         ├── RSS Feeds (noticias)             │
 │         └── Dollar rate APIs                 │
 └──────────────────────────────────────────────┘
@@ -405,6 +419,33 @@ CREATE POLICY "Authenticated read dollar" ON dollar_rates FOR SELECT USING (auth
 CREATE POLICY "Authenticated read earnings" ON earnings_calendar FOR SELECT USING (auth.role() = 'authenticated');
 ```
 
+### Tablas agregadas por las migraciones 0002-0041
+
+El schema de arriba es el de la 0001. Lo que sigue lo agregaron las migraciones
+posteriores; el SQL vive en `supabase/migrations/` y esa es la fuente de verdad.
+
+| Tabla | Migración | Qué guarda |
+| --- | --- | --- |
+| `iol_credentials` | 0002 | Credenciales de IOL cifradas (refresh token, contraseña, expiración del access token) |
+| `asset_metadata` | 0002 | Universo de activos: sector, `display_name`, `asset_type`, `suggestable`, `is_cash_equivalent` |
+| `rss_sources` | 0006 | Fuentes RSS de noticias, configurables |
+| `recommendations` | 0009 | Recomendaciones del asesor, con evaluación a 7, 14 y 30 días y alpha vs SPY |
+| `goal_portfolios` | 0010 | Metas de inversión (monto objetivo, fecha, banda) |
+| `goal_holdings` | 0010 | Qué posiciones están afectadas a cada meta |
+| `performance_reviews` | 0014 | Revisiones periódicas de desempeño de la cartera |
+| `market_quotes` | 0014 | Última cotización por símbolo del universo, con volumen y dólar implícito |
+| `sell_watch` | 0016 | Seguimiento de lo vendido, para el aviso de recompra |
+| `user_api_keys` | 0019 | API key de Anthropic de cada usuario, cifrada |
+| `news_analysis` | 0023 | Análisis de noticias POR USUARIO (sentimiento, impacto, símbolos relacionados) |
+| `backtest_results` | 0039 | Resultado del backtest semana por semana, por estrategia |
+| `daily_mep` | 0041 | Un cierre de MEP por día, para convertir CEDEARs a dólares |
+
+Las columnas nuevas sobre tablas que ya existían están en las migraciones y no
+se repiten acá. Las que más cambiaron:
+
+- `recommendations` (0037, 0038): `outcome_7d_*`, `outcome_14d_*`, `spy_price_at_rec`, `spy_return_*`, `alpha_*`.
+- `price_history`: la columna `volume` existía desde la 0001 pero recién se empezó a escribir en septiembre de 2026.
+
 ---
 
 ## Pantallas y Layout
@@ -514,150 +555,110 @@ Al tocar un tag de temática: filtra las noticias por ese tema.
 
 ---
 
-## Edge Functions (CRON Jobs)
+## Edge Functions
 
-### 1. fetch-portfolio (cada 5 min, lun-vie 10:00-18:00)
+Todas viven en `supabase/functions/`. Los horarios son **UTC** y salen de
+`cron.schedule` en las migraciones (0003, 0014, 0015, 0023, 0024, 0036);
+`cron.schedule` pisa por nombre, así que manda la migración más nueva.
+Argentina no tiene horario de verano: UTC-3 siempre.
 
-```
-1. Llamar a IOL API → get_portfolio + get_balance
-2. Actualizar tabla `positions` con precios actuales
-3. Actualizar `account_balance`
-4. Guardar snapshot diario en `portfolio_snapshots` (si es la primera del día)
-5. Llamar a evaluate-alerts
-```
+### Datos de mercado
 
-### 2. evaluate-alerts (trigger: después de fetch-portfolio)
+| Función | Cuándo | Qué hace |
+| --- | --- | --- |
+| `fetch-portfolio` | cada 5 min, 13:30-19:59 UTC, lun-vie | Trae posiciones y balance de IOL, guarda el snapshot del día y dispara `evaluate-alerts` |
+| `evaluate-alerts` | después de cada `fetch-portfolio` | Evalúa umbrales (trailing stop, stop loss, techo, variación extrema) y manda push |
+| `fetch-dollar-rates` | cada 10 min, 14-19 UTC, lun-vie | Cotizaciones de dólar MEP, CCL, blue y oficial |
+| `fetch-market-quotes` | 20:17 UTC, lun-vie (al cierre) | Cotiza el universo sugerible, guarda el cierre del día en `price_history` con volumen y calcula el dólar implícito |
+| `fetch-transactions` | 20:37 UTC, lun-vie (post cierre) | Operaciones cerradas del día desde IOL |
+| `fetch-news` | cada 30 min desfasado (`7-37/30`), 14-19 UTC, lun-vie | Lee los RSS y clasifica con **Sonnet 5** en `news_analysis`, por usuario |
+| `keep-session-alive` | cada 6 horas | Mantiene viva la sesión de IOL para que el refresh token no muera |
 
-```
-Para cada posición del usuario:
-  1. Calcular P/L vs avg_buy_price
-  2. Calcular variación diaria vs previous_close
-  3. Calcular % del total de cartera
-  4. Calcular concentración por sector
+### Asesor y evaluación
 
-  Evaluar reglas:
-  - P/L > take_profit_pct → alerta TOMA DE GANANCIA
-  - P/L < stop_loss_pct → alerta STOP LOSS (crítica)
-  - daily_change > daily_extreme_pct → alerta VARIACIÓN EXTREMA
-  - position_pct > rebalance_pct → alerta REBALANCEO
-  - sector_pct > sector_concentration_pct → alerta CONCENTRACIÓN
-  - available_cash > idle_cash_threshold → alerta CASH SIN INVERTIR
+| Función | Cuándo | Qué hace |
+| --- | --- | --- |
+| `portfolio-advisor` | 15:00 y 19:00 UTC, lun-vie | El asesor. Arma el contexto completo y le pide a **Opus 5** acciones concretas sobre la cartera |
+| `evaluate-recommendations` | 12:30 UTC, diaria | Mide cada recomendación a 7, 14 y 30 días contra `price_history`, y calcula el alpha vs SPY |
+| `evaluate-performance` | 13:00 UTC, sábados | Revisión semanal del desempeño de la cartera |
+| `goal-advisor` | 16:30 UTC, lunes (y a pedido) | Plan de inversión para cada meta, con **Opus 5** |
+| `earnings-reminder` | 12:00 UTC, diaria | Avisa los earnings próximos de los activos en cartera |
 
-  Si alerta es nueva (no existe una similar en las últimas 24hs):
-    1. Insertar en `alerts`
-    2. Si push habilitado → enviar Web Push notification
-```
+### A pedido desde la app
 
-### 3. fetch-news (cada 30 min)
+| Función | Qué hace |
+| --- | --- |
+| `connect-broker` | Conecta la cuenta de IOL y guarda las credenciales cifradas |
+| `save-api-key` | Guarda la API key de Anthropic del usuario, cifrada |
 
-```
-1. Fetch RSS de: Ámbito, Cronista, La Nación Economía, Reuters, Bloomberg, CNBC
-2. Filtrar por keywords de `world_topics`
-3. Para cada noticia nueva:
-   a. Llamar a Claude API con prompt:
-      "Analiza esta noticia. Devolvé JSON con:
-       summary (2-3 oraciones en español),
-       sentiment (positive/negative/neutral),
-       impact_level (high/medium/low),
-       related_symbols (array de tickers afectados),
-       tags (array de temáticas)"
-   b. Insertar en `news`
-   c. Si sentiment=negative Y related_symbols incluye activo en cartera → alerta
-```
+### A mano (nunca por CRON)
 
-### 4. analyze-opportunities (cada 1 hora)
+| Función | Qué hace |
+| --- | --- |
+| `backfill-prices` | Carga la serie histórica de IOL en `price_history`. One-shot, o cuando entra un símbolo nuevo al universo |
+| `backtest` | Simula qué habría hecho el scoring semana a semana y lo mide contra SPY. Sin IA, determinístico |
 
-```
-1. Obtener últimas 20 noticias + precios actuales de CEDEARs populares
-2. Obtener posiciones actuales del usuario
-3. Llamar a Claude API con prompt:
-   "Eres un analista financiero experto. Analiza estos datos y sugiere
-    oportunidades de inversión. Para cada oportunidad devolvé JSON con:
-    symbol, opportunity_type, title, reasoning (en español),
-    growth_estimate_pct, confidence, time_horizon, target_price.
-    Prioriza activos con momentum, pullbacks en acciones sólidas,
-    y rotaciones sectoriales. Máximo 3 oportunidades."
-4. Insertar en `opportunities` (desactivar oportunidades anteriores del mismo symbol)
-5. Si confidence=high → alerta tipo opportunity al usuario
-```
+> `analyze-opportunities` **ya no existe**: era el predecesor de
+> `portfolio-advisor` y la 0024 lo dio de baja. Usaba la API key global del
+> proyecto para analizar la cartera de cualquier usuario.
 
-### 5. fetch-dollar-rates (cada 10 min, lun-vie 10:00-18:00)
+### Módulos compartidos (`supabase/functions/_shared/`)
 
-```
-1. Fetch cotizaciones MEP, CCL, Blue, Oficial
-2. Insertar en `dollar_rates`
-3. Si brecha MEP/oficial > threshold → alerta
-```
-
-### 6. earnings-reminder (diaria a las 9:00 AM)
-
-```
-1. Consultar `earnings_calendar` para próximos 3 días
-2. Si algún activo en cartera del usuario reporta:
-   → Notificación: "AMZN reporta earnings en 2 días. Evaluar posición."
-```
+| Módulo | Qué resuelve |
+| --- | --- |
+| `claude.ts` | Prompts, structured outputs y llamadas a la API de Claude |
+| `indicators.ts` | RSI, SMA, MACD, retornos, ranking de fuerza relativa, correlaciones, `investmentScore` y volatilidad realizada |
+| `marketRegime.ts` | Régimen de mercado (risk_on / risk_off / crisis) a partir de 4 factores |
+| `priceHistory.ts` | Lectura paginada de `price_history` y corrección de cambios de ratio |
+| `iol.ts` | Cliente de la API de IOL, con renovación y candado del refresh token |
+| `profile.ts` | Perfil del inversor, umbrales y límites de position sizing |
+| `crypto.ts` / `apiKey.ts` | Cifrado de credenciales y de la API key de cada usuario |
+| `market.ts` | Horarios de mercado y feriados |
+| `impliedFx.ts` | Dólar implícito de cada activo contra el MEP |
+| `push.ts` / `rss.ts` / `mapping.ts` / `auth.ts` / `cors.ts` | Web Push, feeds, normalización de símbolos, auth y CORS |
 
 ---
 
 ## Prompts para Claude API
 
-### Prompt de análisis de noticias
+**La fuente de verdad es `supabase/functions/_shared/claude.ts`.** Los prompts
+cambian seguido y copiarlos acá garantiza que queden desincronizados; esta
+sección describe la ESTRUCTURA, no el texto.
 
-```
-Eres un analista financiero especializado en mercados globales y su impacto
-en CEDEARs argentinos. Analiza la siguiente noticia y respondé SOLO con
-un JSON válido (sin markdown, sin backticks):
+La forma de la respuesta la garantiza la API con **structured outputs**
+(`output_config.format` con JSON schema), así que no hay que pedirle al modelo
+que "responda solo con JSON" ni limpiar backticks.
 
-{
-  "summary": "Resumen en español de 2-3 oraciones. Claro, directo, sin jerga innecesaria.",
-  "sentiment": "positive | negative | neutral",
-  "impact_level": "high | medium | low",
-  "related_symbols": ["NVDA", "AMD"],
-  "tags": ["ia-semiconductores", "earnings-season"]
-}
+### `buildAdvisorSystemPrompt()` — el asesor (Opus 5)
 
-Noticia:
-[TÍTULO]
-[CONTENIDO]
-```
+Se arma por secciones, y cada una aparece **solo si el dato existe**: explicarle
+cómo leer algo que no está es invitarlo a inventarlo. En orden:
 
-### Prompt de oportunidades de inversión
+1. **Régimen de mercado** — va primero de todo, antes de la Regla #0: risk_on / risk_off / crisis con sus factores y qué hacer en cada uno.
+2. **Regla #0** — no recomendar es una respuesta válida y preferible.
+3. **Perfil del inversor** — objetivo, sectores preferidos, historial de decisiones.
+4. **Umbrales del usuario** — trailing stop, stop loss, techo de ganancia, concentración.
+5. **Cómo leer cada línea**: movimiento esperado (volatilidad y earnings), indicadores técnicos (RSI, SMA, MACD), ranking de fuerza relativa, score cuantitativo con su desglose, correlaciones altas entre posiciones y TC implícito.
+6. **Límites duros de concentración** — 8% posición nueva, 15% existente, 40% sector.
+7. **Track record** — accuracy a 7 y 30 días, peores errores, activos donde falló más de una vez y alpha promedio vs SPY.
+8. **Regla final** — toda recomendación incluye qué la invalidaría.
 
-```
-Eres un analista financiero experto con perfil moderado-agresivo, especializado
-en CEDEARs argentinos y mercados globales. Tu objetivo es detectar oportunidades
-de inversión para maximizar ganancias.
+El mensaje de usuario trae la cartera línea por línea (valor, peso, P/L,
+tendencia, indicadores, rank, correlaciones), la concentración por sector y por
+tipo, la liquidez, las noticias recientes y el universo sugerible ordenado por
+score.
 
-CARTERA ACTUAL:
-[posiciones con precios y P/L]
+### `buildOpportunitySystemPrompt()` — búsqueda de oportunidades (Opus 5)
 
-NOTICIAS RECIENTES:
-[últimas 10 noticias con sentimiento]
+Comparte con el asesor las guías de indicadores, ranking y score. Hoy no tiene
+llamador: quedó lista para cuando se retome.
 
-PRECIOS ACTUALES DE CEDEARs DISPONIBLES:
-[precios de los principales CEDEARs en BCBA]
+### Análisis de noticias (Sonnet 5)
 
-Respondé SOLO con un JSON array (sin markdown, sin backticks):
-[
-  {
-    "symbol": "AVGO",
-    "opportunity_type": "pullback | momentum | undervalued | sector_rotation | earnings_play",
-    "title": "Título corto y accionable",
-    "reasoning": "Análisis en español de 3-4 oraciones explicando POR QUÉ es oportunidad ahora",
-    "growth_estimate_pct": 25,
-    "confidence": "high | medium | low",
-    "time_horizon": "short | medium | long",
-    "current_price": 15470,
-    "target_price": 19340
-  }
-]
-
-Máximo 3 oportunidades. Solo sugiere activos donde tengas alta convicción.
-Prioriza:
-- Pullbacks en acciones sólidas (caída temporal en empresa fuerte)
-- Momentum confirmado por earnings positivos
-- Rotaciones sectoriales por cambios macro
-```
+Un LOTE de noticias por request, no una por llamada: el system prompt se paga
+una vez por lote. `thinking: disabled` y `effort: low` — clasificar sentimiento
+no necesita razonamiento y en Sonnet 5 el thinking adaptativo viene activo por
+defecto.
 
 ---
 
@@ -753,56 +754,48 @@ self.addEventListener("notificationclick", (event) => {
 
 ---
 
-## Roadmap de desarrollo
+## Estado del proyecto
 
-### Fase 1 — Fundación (3-4 días)
+### Base — ✅ completada
 
-- [ ] Init proyecto: Vite + React + TypeScript + Tailwind
-- [ ] Configurar Supabase: crear proyecto, ejecutar schema SQL
-- [ ] Setup PWA: vite-plugin-pwa, manifest, service worker básico
-- [ ] Auth: login con email/magic link via Supabase
-- [ ] Layout base: bottom nav, dark theme, tipografía
+La app funcionando de punta a punta: PWA con auth, sync de cartera desde IOL cada
+5 minutos, motor de alertas con push, feed de noticias analizadas con IA,
+dashboard con métricas y gráficos, metas de inversión y el asesor guardando
+recomendaciones evaluables. Todo lo que el roadmap original llamaba Fases 1 a 6.
 
-### Fase 2 — Dashboard (3-4 días)
+### Fase 1 (Contexto cuantitativo) — ✅ completada
 
-- [ ] Integración IOL API: fetch portfolio y balance
-- [ ] MetricCards: total, ganancia, pérdida, cash
-- [ ] Tabla de posiciones con sparklines (Recharts)
-- [ ] Donut chart de composición por sector
-- [ ] Top 5 liquidez rápida (ordenado por rescue_time + valuación)
-- [ ] Cotización dólar inline
+Le dio al asesor con qué decidir, además del precio y las noticias:
 
-### Fase 3 — Motor de alertas (2-3 días)
+- **Indicadores técnicos** desde `price_history`: RSI de Wilder, SMA 20/50, MACD.
+- **Ranking de fuerza relativa** sobre retornos de 7, 30 y 90 días.
+- **Track record**: el resultado de sus propias recomendaciones entra al prompt.
+- **Position sizing duro**: 8% / 15% / 40% aplicados por código sobre la respuesta del modelo, no sugeridos.
+- **Evaluación a 7, 14 y 30 días**, para medir las tesis de corto plazo en su propio horizonte.
 
-- [ ] Implementar evaluate-alerts en Edge Function
-- [ ] Crear alert_rules por defecto al registrar usuario
-- [ ] Push notifications con Web Push API + VAPID
-- [ ] Lista de alertas con filtros y swipe dismiss
-- [ ] Badge counter en bottom nav
+### Fase 2 (Robustez) — ✅ casi completada
 
-### Fase 4 — Noticias y AI (3-4 días)
+- **Benchmark vs SPY**: alpha por recomendación y promedio en el prompt.
+- **Correlaciones** entre posiciones, para que "diversificar" no sea duplicar la apuesta.
+- **Scoring cuantitativo** (`investmentScore`) que prefiltra y ordena antes de que la IA opine, con 3 variantes de pesos.
+- **Backtesting** semana a semana contra SPY, determinístico y sin IA.
+- **Backfill de 14 meses** de historia desde IOL, más la corrección de cambios de ratio.
+- **Detector de régimen de mercado** con 4 factores y multiplicador sobre el score, más la conversión de SPY a dólares para no perderse caídas tapadas por la devaluación.
 
-- [ ] RSS fetcher Edge Function
-- [ ] Integración Claude API para análisis de noticias
-- [ ] Feed de noticias con filtros por tags
-- [ ] Tags de temáticas mundiales interactivos
-- [ ] Alertas por noticias negativas sobre activos en cartera
+Lo que falta de esta fase es lo que siga al detector de régimen.
 
-### Fase 5 — Oportunidades (2-3 días)
+**Resultado del backtest, a septiembre de 2026:** sobre 44 semanas con datos
+corregidos, el scoring da alpha negativo o apenas positivo según la variante
+(V1 -1.43%, V2 +0.05%, V3 +1.16% a 4 semanas) y las tres ganan menos de la mitad
+de las semanas. El acumulado positivo de V3 sale casi entero de una sola semana
+—el rally post-electoral del 27-O—, así que **el default sigue siendo V1**. El
+scoring todavía no demostró que le gane al índice.
 
-- [ ] Edge Function analyze-opportunities con Claude API
-- [ ] Cards de oportunidades con growth estimate
-- [ ] Earnings calendar y reminders
-- [ ] Sugerencia de compra cuando oportunidad es de alta confianza
+### Fase 3 (Trading) — pendiente
 
-### Fase 6 — Pulido y deploy (2-3 días)
-
-- [ ] Gráfico de evolución de cartera (portfolio_snapshots)
-- [ ] Pantalla de configuración (editar umbrales, toggles)
-- [ ] Historial de operaciones
-- [ ] Optimización mobile, animaciones, transitions
-- [ ] Deploy a Vercel
-- [ ] Testing completo
+Ejecución de órdenes contra IOL desde la app, con confirmación explícita del
+usuario. Hoy todo el sistema es de solo lectura: sugiere, mide y avisa, pero
+nunca opera. Escribir en IOL cambia el perfil de riesgo del proyecto entero.
 
 ---
 
@@ -812,24 +805,39 @@ self.addEventListener("notificationclick", (event) => {
 VITE_SUPABASE_URL=https://xxx.supabase.co
 VITE_SUPABASE_ANON_KEY=eyJ...
 SUPABASE_SERVICE_ROLE_KEY=eyJ... (solo en Edge Functions)
-ANTHROPIC_API_KEY=sk-ant-... (solo en Edge Functions)
 VAPID_PUBLIC_KEY=BN... (frontend + backend)
 VAPID_PRIVATE_KEY=... (solo en Edge Functions)
-IOL_API_TOKEN=... (solo en Edge Functions — refresh token de IOL)
+ENCRYPTION_KEY=... (solo en Edge Functions — cifra credenciales de IOL y API keys)
 ```
+
+`SUPABASE_URL` y `SUPABASE_SERVICE_ROLE_KEY` ya vienen inyectadas en el runtime
+de las Edge Functions; no hace falta setearlas como secrets.
+
+**No hay `ANTHROPIC_API_KEY` ni `IOL_API_TOKEN` de proyecto.** La key de
+Anthropic la carga cada usuario desde Configuración y se guarda cifrada en
+`user_api_keys`; las credenciales de IOL se conectan desde la app y se guardan
+cifradas en `iol_credentials`.
 
 ---
 
 ## Notas importantes para el desarrollo
 
-1. **IOL API:** La conexión con IOL se hace vía MCP. Para la app standalone necesitamos usar la API REST de IOL directamente. Documentar los endpoints necesarios: portfolio, balance, quotes, orders.
+1. **IOL API:** la app usa la API REST de IOL directamente (`api.invertironline.com`), no MCP. El cliente está en `_shared/iol.ts`. El refresh token ROTA en cada uso, por eso se persiste y hay un candado para que dos procesos no lo renueven a la vez. El gateway interno de IOL no resuelve en DNS público: no intentarlo.
 
-2. **Rate limits:** IOL tiene rate limits. El CRON de 5 minutos debería ser suficiente. No hacer polling desde el frontend.
+2. **Rate limits:** IOL tiene rate limits. El CRON de 5 minutos alcanza. No hacer polling desde el frontend. `backfill-prices` va de a un símbolo con 500 ms de freno entre uno y otro.
 
-3. **Claude API costs:** Usar Sonnet (no Opus) para mantener costos bajos. Cachear respuestas de análisis de noticias.
+3. **Costos de IA:** **cada usuario carga su propia API key de Anthropic en la app. El costo de la IA lo paga el usuario, no el proyecto.** Por eso el asesor usa Opus 5 sin culpa: son dos corridas por día sobre decisiones de plata real. Sonnet 5 queda para el análisis de noticias, que es alto volumen y tarea simple.
 
-4. **Seguridad:** NUNCA almacenar credenciales de IOL en el frontend. Todo pasa por Edge Functions.
+4. **Seguridad:** NUNCA almacenar credenciales de IOL ni API keys en el frontend. Todo pasa por Edge Functions y se guarda cifrado.
 
-5. **Mobile first:** El 90% del uso va a ser desde el celular. Diseñar para pantallas de 375px primero.
+5. **Mobile first:** el 90% del uso va a ser desde el celular. Diseñar para pantallas de 375px primero.
 
-6. **Offline:** La PWA debe mostrar la última data conocida cuando no hay conexión. Cachear agresivamente con el Service Worker.
+6. **Offline:** la PWA debe mostrar la última data conocida cuando no hay conexión. Cachear agresivamente con el Service Worker.
+
+7. **`price_history` necesita profundidad.** Los indicadores técnicos y el backtest no funcionan con una serie corta: el MACD necesita 35 ruedas, la SMA50 necesita 50 y el retorno de 90 días necesita 63. Con pocas barras `relativeStrengthRank` manda a todos los símbolos al grupo de "incompletos", que se ordena alfabéticamente, y la componente de momentum del score termina repartida por abecedario. **Correr `backfill-prices` (14 meses) cuando se agrega un símbolo nuevo al universo.**
+
+8. **Los CEDEARs cambian de ratio periódicamente.** Un cambio de ratio entra a la serie como una caída del 90% que nunca ocurrió, y IOL no ofrece serie ajustada (el parámetro `ajustada` devuelve vacío para CEDEARs). `adjustRatioChanges()` en `_shared/priceHistory.ts` los corrige **en la lectura**: los datos crudos se preservan en la base. Detecta por dos condiciones juntas —salto mayor a ±45% Y factor a menos de 5% de un entero—, porque la magnitud sola borraría un derrumbe real. Un factor ÷2 avisa por consola: mirando solo el precio es indistinguible de una caída del 50%.
+
+9. **El benchmark cotiza en pesos.** SPY en `price_history` es el CEDEAR, así que una devaluación lo empuja para arriba mientras el índice cae en dólares. `marketRegime.ts` convierte a dólares con `daily_mep` y se queda con la señal más pesimista de las dos monedas. `daily_mep` se llena sola con las dos corridas diarias del asesor y no tiene backfill posible: hasta juntar 5 días, el régimen mide en pesos.
+
+10. **Todo el sistema es de solo lectura sobre IOL.** Sugiere, mide y avisa; no opera. El único POST a IOL que existe en el cliente está sin usar.
